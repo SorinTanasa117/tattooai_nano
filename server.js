@@ -18,11 +18,15 @@ const path = require('path');
 const { URL } = require('url');
 
 const ROOT = __dirname;
-// Use Netlify's writable OS temporary directory if running in production
+
+// Netlify uses a read-only filesystem except for the system /tmp directory
 const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : path.join(ROOT, 'uploads');
 
-// Ensure uploads directory exists
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// Only run mkdir Sync if we aren't in a flat, shared folder like /tmp
+if (!process.env.NETLIFY && !fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
 
 // Load .env from project root (no npm deps required)
 (function loadDotEnv() {
