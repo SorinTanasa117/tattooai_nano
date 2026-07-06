@@ -15,6 +15,4 @@ tattoo_*.webp
 # Patched workflows
 workflow-patched*.json
 payload-*.json
-
-
 .env
