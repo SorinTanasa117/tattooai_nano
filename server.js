@@ -2,34 +2,54 @@
 /**
  * InkFrame dev server.
  * Zero npm dependencies. Serves the widget, handles uploads,
- * and proxies placement payloads into a ComfyUI workflow.
+ * and proxies placement payloads to an AI image API.
  *
  * Env vars:
- *   PORT          - widget port (default 5173)
- *   COMFYUI_URL   - ComfyUI base URL (default http://127.0.0.1:8188)
- *   WORKFLOW_FILE     - workflow template JSON (default merged-tattoo-rotator-v6.json)
- *   PATCH_SCRIPT      - path to patch_workflow.py (default scripts/patch_workflow.py)
- *   RENDER_TIMEOUT_MS - max wait for ComfyUI render, ms (default 10000000 = 10000s)
+ *   PORT              - widget port (default 5000)
+ *   AI_API_BASE_URL   - AI provider base URL (default https://generativelanguage.googleapis.com/v1beta)
+ *   AI_PROVIDER_API_KEY - API key for the AI provider
+ *   AI_MODEL_NAME     - model to use (default gemini-2.5-flash-preview-05-20)
+ *   RENDER_TIMEOUT_MS - max wait for AI render, ms (default 30000)
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const { URL } = require('url');
-const { guiToPrompt } = require('./scripts/gui_to_prompt.js');
 
 const ROOT = __dirname;
-// Netlify allows writing files ONLY inside the OS /tmp directory
-const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : ROOT;
+// Use Netlify's writable OS temporary directory if running in production
+const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : path.join(ROOT, 'uploads');
+
+// Ensure uploads directory exists
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// Load .env from project root (no npm deps required)
+(function loadDotEnv() {
+  const envPath = path.join(ROOT, '.env');
+  if (!fs.existsSync(envPath)) return;
+  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq < 1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let val = trimmed.slice(eq + 1).trim();
+    // Strip inline comments (outside of quotes)
+    if (!val.startsWith('"') && !val.startsWith("'")) {
+      val = val.replace(/\s+#.*$/, '');
+    }
+    val = val.replace(/^["']|["']$/g, '');
+    if (!(key in process.env)) process.env[key] = val;
+  }
+})();
 const PORT = parseInt(process.env.PORT || '5173', 10);
 const HOST = process.env.HOST || 'localhost';
-const COMFYUI_URL = (process.env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '');
-const WORKFLOW_FILE = process.env.WORKFLOW_FILE || path.join(ROOT, 'merged-tattoo-rotator-v6.json');
-const PATCH_SCRIPT = process.env.PATCH_SCRIPT || path.join(ROOT, 'scripts', 'patch_workflow.py');
-// Default 10000s -- CPU systems can easily take 5-10 min for a Flux2 inpaint+IP-Adapter pass.
-// Override with the RENDER_TIMEOUT_MS env var (value in milliseconds).
-const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '10000000', 10);
+const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || '';
+const AI_MODEL_NAME = process.env.AI_MODEL_NAME || 'gemini-2.5-flash-preview-05-20';
+const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '30000', 10);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -62,10 +82,6 @@ function sendJson(res, status, obj) {
 function sendError(res, status, message, extra) {
   if (!extra) extra = {};
   const body = Object.assign({ status: 'error', message }, extra);
-  // Promote well-known structured error fields to top-level keys so the
-  // browser console / UI can show them without digging into a nested object.
-  if (extra && extra.comfyuiNodeErrors) body.comfyui_node_errors = extra.comfyuiNodeErrors;
-  if (extra && extra.comfyuiResponse)   body.comfyui_response     = extra.comfyuiResponse;
   sendJson(res, status, body);
 }
 
@@ -145,15 +161,13 @@ function splitMultipart(buf, boundary) {
 }
 
 function nextFilename(dir, prefix, ext) {
-  // Use exclusive-create (wx) to atomically claim a filename, avoiding the
-  // TOCTOU race between existsSync and writeFileSync under concurrent uploads.
   for (let i = 1; i < 10000; i++) {
     const name = `${prefix}_${i}${ext}`;
     const full = path.join(dir, name);
     try {
       const fd = fs.openSync(full, 'wx');
       fs.closeSync(fd);
-      return name; // we created (and own) this file; caller overwrites it
+      return name;
     } catch (e) {
       if (e.code === 'EEXIST') continue;
       throw e;
@@ -201,180 +215,111 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-async function uploadToComfyUI(filePath, originalName) {
-  const fileBuf = fs.readFileSync(filePath);
-  const blob = new Blob([fileBuf], { type: 'image/png' });
-  const form = new FormData();
-  form.append('image', blob, originalName);
-  const resp = await fetch(COMFYUI_URL + '/upload/image', { method: 'POST', body: form });
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => '');
-    throw new Error('ComfyUI upload failed (' + resp.status + '): ' + txt.slice(0, 200));
-  }
-  const data = await resp.json();
-  if (!data.name) throw new Error('ComfyUI upload returned no name');
-  return data.name;
-}
+/**
+ * Call the AI image generation API.
+ * Sends an array of parts (text + inline_data) and returns { data: Buffer, mimeType: string }.
+ */
+async function callAI(parts) {
+  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY is not set in environment');
 
-async function queuePrompt(workflow) {
-  // Detect GUI/API format (the shape of final.json) and convert to prompt
-  // format before POSTing. The /prompt endpoint expects
-  //   { "1": {class_type, inputs}, "2": {...}, ... }
-  // not the GUI's { nodes: [...], links: [...] } shape. Sending GUI format
-  // triggers AttributeErrors / TypeErrors in node_replace_manager and any
-  // on_prompt_handler that expects a dict of {class_type, inputs}.
-  let promptPayload = workflow;
-  const isGuiFormat = workflow && Array.isArray(workflow.nodes);
-  if (isGuiFormat) {
+  const url = `${AI_API_BASE_URL}/models/${AI_MODEL_NAME}:generateContent?key=${AI_API_KEY}`;
+  const reqBody = {
+    contents: [{ parts }],
+    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+  };
+
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error('AI API request failed: ' + e.message);
+  }
+
+  const rawText = await resp.text().catch(() => '');
+  if (!resp.ok) {
+    let detail = rawText.slice(0, 400);
     try {
-      promptPayload = guiToPrompt(workflow);
-    } catch (e) {
-      const err = new Error('Failed to convert workflow to prompt format: ' + e.message);
-      err.comfyuiResponse = { conversion_error: e.message };
-      throw err;
-    }
+      const parsed = JSON.parse(rawText);
+      if (parsed.error && parsed.error.message) detail = parsed.error.message;
+    } catch (_) {}
+    throw new Error('AI API error (HTTP ' + resp.status + '): ' + detail);
   }
 
-  // Always include the original GUI-format workflow in extra_data so ComfyUI
-  // can resolve subgraph GUID class_types (from definitions.subgraphs) that
-  // exist in workflows like steal_tattoo.json.  Harmless for plain workflows.
-  const body = { prompt: promptPayload, client_id: 'inkframe-widget' };
-  if (isGuiFormat) {
-    body.extra_data = { extra_pnginfo: { workflow: workflow } };
+  let parsed;
+  try { parsed = JSON.parse(rawText); } catch (_) {
+    throw new Error('AI API returned non-JSON response: ' + rawText.slice(0, 200));
   }
 
-  const resp = await fetch(COMFYUI_URL + '/prompt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  // Read body once, regardless of status code — ComfyUI returns structured
-  // errors in JSON on both 400 (validation) and 500 (execution crash).
-  const rawBody = await resp.text().catch(() => '');
-  let parsed = null;
-  try { parsed = rawBody ? JSON.parse(rawBody) : null; } catch (_) { /* not JSON */ }
-
-  if (!resp.ok) {
-    // Build the most informative error we can: status, top-level error,
-    // per-node errors, and a slice of the raw text.
-    const lines = [];
-    lines.push('ComfyUI /prompt failed (HTTP ' + resp.status + ')');
-    if (parsed && parsed.error) {
-      lines.push('error: ' + (typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error)));
-    }
-    if (parsed && parsed.node_errors && Object.keys(parsed.node_errors).length) {
-      lines.push('node_errors:');
-      for (const nodeId of Object.keys(parsed.node_errors)) {
-        const ne = parsed.node_errors[nodeId];
-        const msg = (ne && (ne.message || ne.error || JSON.stringify(ne))) || 'unknown';
-        const type = (ne && ne.class_type) ? ' (' + ne.class_type + ')' : '';
-        lines.push('  node ' + nodeId + type + ': ' + String(msg).slice(0, 400));
+  // Extract the first image part from the response
+  const candidates = parsed.candidates || [];
+  for (const candidate of candidates) {
+    const responseParts = (candidate.content && candidate.content.parts) || [];
+    for (const part of responseParts) {
+      if (part.inlineData && part.inlineData.data) {
+        return {
+          data: Buffer.from(part.inlineData.data, 'base64'),
+          mimeType: part.inlineData.mimeType || 'image/png',
+        };
+      }
+      // Some API versions use camelCase vs snake_case
+      if (part.inline_data && part.inline_data.data) {
+        return {
+          data: Buffer.from(part.inline_data.data, 'base64'),
+          mimeType: part.inline_data.mime_type || 'image/png',
+        };
       }
     }
-    if (!parsed) {
-      lines.push('raw body: ' + rawBody.slice(0, 800));
-    }
-    const err = new Error(lines.join('\n'));
-    err.comfyuiStatus = resp.status;
-    err.comfyuiResponse = parsed || { raw: rawBody.slice(0, 4000) };
-    err.comfyuiNodeErrors = (parsed && parsed.node_errors) || null;
-    throw err;
   }
 
-  // 2xx but with a structured error embedded (ComfyUI does this for validation).
-  if (parsed && (parsed.error || (parsed.node_errors && Object.keys(parsed.node_errors).length))) {
-    const lines = ['ComfyUI rejected workflow'];
-    if (parsed.error) lines.push('error: ' + (typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error)));
-    if (parsed.node_errors) {
-      for (const nodeId of Object.keys(parsed.node_errors)) {
-        const ne = parsed.node_errors[nodeId];
-        const msg = (ne && (ne.message || ne.error || JSON.stringify(ne))) || 'unknown';
-        lines.push('  node ' + nodeId + ': ' + String(msg).slice(0, 400));
-      }
+  // Surface any text response for debugging
+  let textResponse = '';
+  for (const candidate of candidates) {
+    const responseParts = (candidate.content && candidate.content.parts) || [];
+    for (const part of responseParts) {
+      if (part.text) textResponse += part.text;
     }
-    const err = new Error(lines.join('\n'));
-    err.comfyuiResponse = parsed;
-    err.comfyuiNodeErrors = parsed.node_errors || null;
-    throw err;
   }
-
-  if (!parsed || !parsed.prompt_id) {
-    throw new Error('ComfyUI did not return a prompt_id (raw: ' + rawBody.slice(0, 200) + ')');
-  }
-  return parsed.prompt_id;
+  throw new Error('AI API returned no image. ' + (textResponse ? 'Response: ' + textResponse.slice(0, 300) : 'Empty response.'));
 }
 
-async function pollForResult(promptId, timeoutMs) {
-  const start = Date.now();
-  let lastStatus = null;
-  while (Date.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 1000));
-    const resp = await fetch(COMFYUI_URL + '/history/' + promptId);
-    if (!resp.ok) continue;
-    const history = await resp.json();
-    const entry = history[promptId];
-    if (!entry) continue;
-    const status = entry.status || {};
-    lastStatus = status.status_str || status.state || 'unknown';
-    if (status.completed === true) {
-      const outputs = entry.outputs || {};
-      for (const nodeId of Object.keys(outputs)) {
-        const out = outputs[nodeId];
-        if (out.images && out.images.length > 0) {
-          return { image: out.images[0], promptId: promptId };
-        }
-      }
-      throw new Error('ComfyUI finished but produced no image output');
-    }
-    if (status.status_str === 'error' || status.state === 'error') {
-      throw new Error('ComfyUI execution error: ' + JSON.stringify(entry).slice(0, 300));
-    }
-  }
-  throw new Error('ComfyUI render timed out after ' + Math.round(timeoutMs / 1000) + 's (last status: ' + lastStatus + ')');
+function imageToBase64Part(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+  const mimeType = mimeMap[ext] || 'image/png';
+  const data = fs.readFileSync(filePath).toString('base64');
+  return { inlineData: { mimeType, data } };
 }
 
-function runPatchScript(payloadObj) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(PATCH_SCRIPT)) return reject(new Error('Patch script not found: ' + PATCH_SCRIPT));
-    if (!fs.existsSync(WORKFLOW_FILE)) return reject(new Error('Workflow file not found: ' + WORKFLOW_FILE + '. Drop merged-tattoo-rotator-v6.json into the project root or set WORKFLOW_FILE.'));
-    const py = process.platform === 'win32' ? 'python' : 'python3';
-    const proc = spawn(py, [PATCH_SCRIPT, '--workflow', WORKFLOW_FILE, '--print-summary'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const outChunks = [];
-    const errChunks = [];
-    proc.stdout.on('data', (c) => outChunks.push(c));
-    proc.stderr.on('data', (c) => errChunks.push(c));
-    proc.on('error', (e) => reject(new Error('Failed to spawn patch script (' + py + '): ' + e.message)));
-    proc.on('close', (code) => {
-      const stderr = Buffer.concat(errChunks).toString('utf8');
-      if (code !== 0) return reject(new Error('Patch script exited ' + code + ': ' + stderr.slice(0, 400)));
-      try {
-        const stdout = Buffer.concat(outChunks).toString('utf8');
-        const lines = stdout.split('\n');
-        const jsonStart = lines.findIndex((l) => l.trim().startsWith('{'));
-        const jsonText = jsonStart >= 0 ? lines.slice(jsonStart).join('\n') : stdout;
-        const workflow = JSON.parse(jsonText);
-        resolve(workflow);
-      } catch (e) {
-        reject(new Error('Failed to parse patched workflow: ' + e.message));
-      }
-    });
-    proc.stdin.write(JSON.stringify(payloadObj));
-    proc.stdin.end();
-  });
+// Allowlist of filename patterns that may be served or read.
+// Only files matching these patterns (created by the upload/render handlers) are accessible.
+const UPLOAD_PATTERNS = [
+  /^body_\d+\.(png|jpe?g|webp)$/i,
+  /^tattoo_\d+\.(png|jpe?g|webp)$/i,
+  /^steal_src_\d+\.(png|jpe?g|webp|gif)$/i,
+  /^stolen_\d+\.(png|jpe?g)$/i,
+  /^composite_\d+\.(png|jpe?g|webp)$/i,
+  /^result_\d+\.(png|jpe?g)$/i,
+];
+function isAllowedUploadFilename(name) {
+  if (typeof name !== 'string') return false;
+  if (name.startsWith('.') || name.includes('/') || name.includes('\\') || name.includes('..')) return false;
+  return UPLOAD_PATTERNS.some((re) => re.test(name));
 }
 
 async function handleUpload(req, res, kind) {
-  const prefix = kind === 'body' ? 'body' : kind === 'steal-source' ? 'steal_src' : 'tattoo';
+  const prefixMap = { body: 'body', tattoo: 'tattoo', 'steal-source': 'steal_src', composite: 'composite' };
+  const prefix = prefixMap[kind] || kind;
   const ct = req.headers['content-type'] || '';
   if (!ct.toLowerCase().startsWith('multipart/form-data')) {
     return sendError(res, 400, 'Expected multipart/form-data');
   }
   try {
-try {
-    const result = await parseMultipart(req, ct, UPLOAD_DIR, prefix); // <-- NEW
+    const result = await parseMultipart(req, ct, UPLOAD_DIR, prefix);
     log('upload ' + kind + ':', result.filename, '(' + result.size + ' bytes)');
     sendJson(res, 200, {
       status: 'ok',
@@ -391,20 +336,17 @@ try {
 }
 
 function handleStatus(res) {
-  const files = fs.readdirSync(ROOT);
+  const files = fs.readdirSync(UPLOAD_DIR);
   const bodies = files.filter((f) => /^body_\d+\./i.test(f)).sort();
   const tattoos = files.filter((f) => /^tattoo_\d+\./i.test(f)).sort();
-  const hasWorkflow = fs.existsSync(WORKFLOW_FILE);
   sendJson(res, 200, {
     status: 'ok',
     bodies: bodies.map((f) => ({ filename: f, url: '/uploads/' + f })),
     tattoos: tattoos.map((f) => ({ filename: f, url: '/uploads/' + f })),
-    workflow: hasWorkflow ? path.basename(WORKFLOW_FILE) : null,
-    comfyuiUrl: COMFYUI_URL,
+    ai_model: AI_MODEL_NAME,
+    ai_ready: !!AI_API_KEY,
   });
 }
-
-const STEAL_WORKFLOW_FILE = path.join(ROOT, 'steal_tattoo.json');
 
 async function handleStealTattoo(req, res) {
   const t0 = Date.now();
@@ -416,71 +358,48 @@ async function handleStealTattoo(req, res) {
   }
 
   const { source_filename } = body;
-  // Restrict to files uploaded via /api/upload/steal-source only.
-  // Pattern: steal_src_<N>.<ext> — prevents callers from pointing at
-  // arbitrary project files (server.js, .env, tattoo_N.png, etc.).
-  const isStealSourceFilename = (name) =>
-    typeof name === 'string' &&
-    /^steal_src_\d+\.(png|jpe?g|webp|gif)$/i.test(name);
-
-  if (!isStealSourceFilename(source_filename))
+  if (!isAllowedUploadFilename(source_filename) || !/^steal_src_/i.test(source_filename))
     return sendError(res, 400, 'Invalid source_filename: must be a steal-source upload (steal_src_N.ext)');
 
   const sourcePath = path.join(UPLOAD_DIR, source_filename);
   if (!fs.existsSync(sourcePath))
     return sendError(res, 400, 'Source file not found: ' + source_filename);
 
-  if (!fs.existsSync(STEAL_WORKFLOW_FILE))
-    return sendError(res, 500, 'steal_tattoo.json not found in project root');
+  if (!AI_API_KEY)
+    return sendError(res, 500, 'AI_PROVIDER_API_KEY is not configured');
 
   try {
-    const ping = await fetch(COMFYUI_URL + '/system_stats', { signal: AbortSignal.timeout(3000) });
-    if (!ping.ok) throw new Error('status ' + ping.status);
-  } catch (e) {
-    return sendError(res, 502, 'ComfyUI is not reachable at ' + COMFYUI_URL + ' (' + e.message + ')');
-  }
+    log('steal-tattoo: calling AI to extract tattoo from', source_filename);
 
-  try {
-    log('steal-tattoo: uploading source image to ComfyUI...');
-    const comfyName = await uploadToComfyUI(sourcePath, source_filename);
-    log('steal-tattoo: uploaded as', comfyName);
+    const parts = [
+      {
+        text: [
+          'Extract and isolate the tattoo design from this photo.',
+          'Remove all skin, body parts, background, and non-tattoo elements.',
+          'Return only the tattoo artwork — clean lines and colors on a white background — suitable for reuse as a tattoo template.',
+          'Preserve the exact lines, shading, and colors of the tattoo.',
+        ].join(' '),
+      },
+      imageToBase64Part(sourcePath),
+    ];
 
-    // Patch the GUI-format workflow: set node 24 (LoadImage) to the uploaded filename.
-    const workflow = JSON.parse(fs.readFileSync(STEAL_WORKFLOW_FILE, 'utf8'));
-    const loadNode = workflow.nodes.find((n) => n.id === 24);
-    if (!loadNode) throw new Error('steal_tattoo.json: LoadImage node (id=24) not found');
-    loadNode.widgets_values = [comfyName, 'image'];
+    const result = await callAI(parts);
 
-    log('steal-tattoo: queuing prompt...');
-    const promptId = await queuePrompt(workflow);
-    log('steal-tattoo: prompt_id =', promptId);
-
-    log('steal-tattoo: polling for result...');
-    const result = await pollForResult(promptId, RENDER_TIMEOUT_MS);
-    const image = result.image;
-    const outputUrl = '/api/output?filename=' + encodeURIComponent(image.filename) +
-      '&subfolder=' + encodeURIComponent(image.subfolder || '') +
-      '&type=' + encodeURIComponent(image.type || 'output');
+    const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
+    const outName = nextFilename(UPLOAD_DIR, 'stolen', ext);
+    fs.writeFileSync(path.join(UPLOAD_DIR, outName), result.data);
 
     const elapsed = Date.now() - t0;
-    log('steal-tattoo: done in', elapsed, 'ms ->', image.filename);
+    log('steal-tattoo: done in', elapsed, 'ms ->', outName);
     sendJson(res, 200, {
       status: 'done',
-      prompt_id: promptId,
-      output_filename: image.filename,
-      output_subfolder: image.subfolder || '',
-      output_type: image.type || 'output',
-      output_url: outputUrl,
+      output_filename: outName,
+      output_url: '/uploads/' + outName,
       elapsed_ms: elapsed,
     });
   } catch (err) {
     log('steal-tattoo: error:', err.message);
-    if (err.stack) log(err.stack);
-    const extra = { step: 'steal' };
-    if (err.comfyuiStatus) extra.comfyuiStatus = err.comfyuiStatus;
-    if (err.comfyuiNodeErrors) extra.comfyuiNodeErrors = err.comfyuiNodeErrors;
-    if (err.comfyuiResponse) extra.comfyuiResponse = err.comfyuiResponse;
-    sendError(res, 500, err.message, extra);
+    sendError(res, 500, err.message, { step: 'steal' });
   }
 }
 
@@ -497,135 +416,146 @@ async function handleRunWorkflow(req, res) {
   const missing = required.filter((k) => payload[k] === undefined || payload[k] === null);
   if (missing.length) return sendError(res, 400, 'Missing payload fields: ' + missing.join(', '));
 
-  // Validate filenames: must be a bare filename (no path separators or ..)
-  // and must match the expected upload naming pattern to prevent path traversal.
-  const isSafeFilename = (name) =>
-    typeof name === 'string' &&
-    !name.includes('/') &&
-    !name.includes('\\') &&
-    !name.includes('..') &&
-    /^[a-zA-Z0-9_.\-]+$/.test(name);
-  if (!isSafeFilename(payload.body_filename))
-    return sendError(res, 400, 'Invalid body_filename: must be a plain filename with no path components');
-  if (!isSafeFilename(payload.tattoo_filename))
-    return sendError(res, 400, 'Invalid tattoo_filename: must be a plain filename with no path components');
+  // Strict allowlist: body_filename must be a body upload, tattoo_filename must be a tattoo upload
+  if (!isAllowedUploadFilename(payload.body_filename) || !/^body_/i.test(payload.body_filename))
+    return sendError(res, 400, 'Invalid body_filename: must be a body upload (body_N.ext)');
+  if (!isAllowedUploadFilename(payload.tattoo_filename) || !/^tattoo_/i.test(payload.tattoo_filename))
+    return sendError(res, 400, 'Invalid tattoo_filename: must be a tattoo upload (tattoo_N.ext)');
 
-// Change ROOT to UPLOAD_DIR
+  // Composite reference is optional
+  let compositePath = null;
+  if (payload.composite_filename) {
+    if (!isAllowedUploadFilename(payload.composite_filename) || !/^composite_/i.test(payload.composite_filename))
+      return sendError(res, 400, 'Invalid composite_filename: must be a composite upload (composite_N.ext)');
+    const cp = path.join(UPLOAD_DIR, payload.composite_filename);
+    if (fs.existsSync(cp)) compositePath = cp;
+  }
+
   const bodyPath = path.join(UPLOAD_DIR, payload.body_filename);
   const tattooPath = path.join(UPLOAD_DIR, payload.tattoo_filename);
   if (!fs.existsSync(bodyPath)) return sendError(res, 400, 'Body file not found: ' + payload.body_filename);
   if (!fs.existsSync(tattooPath)) return sendError(res, 400, 'Tattoo file not found: ' + payload.tattoo_filename);
 
-  try {
-    const ping = await fetch(COMFYUI_URL + '/system_stats', { signal: AbortSignal.timeout(3000) });
-    if (!ping.ok) throw new Error('status ' + ping.status);
-  } catch (e) {
-    return sendError(res, 502, 'ComfyUI is not reachable at ' + COMFYUI_URL + ' (' + e.message + '). Is the server running?');
-  }
+  if (!AI_API_KEY)
+    return sendError(res, 500, 'AI_PROVIDER_API_KEY is not configured');
 
   try {
-    log('run-workflow: uploading files to ComfyUI...');
-    const [bodyComfyName, tattooComfyName] = await Promise.all([
-      uploadToComfyUI(bodyPath, payload.body_filename),
-      uploadToComfyUI(tattooPath, payload.tattoo_filename),
-    ]);
-    log('run-workflow: uploaded as', bodyComfyName, '/', tattooComfyName);
+    log('run-workflow: calling AI to render tattoo' + (compositePath ? ' (with composite reference)' : '') + '...');
 
-    const patchedPayload = Object.assign({}, payload, { body_filename: bodyComfyName, tattoo_filename: tattooComfyName });
+    const rotation = payload.rotation || 0;
 
-    log('run-workflow: patching workflow...');
-    const workflow = await runPatchScript(patchedPayload);
+    let prompt, parts;
 
-    // Save a versioned snapshot of the fully-patched workflow (all sentinels
-    // replaced with real values) so the user can inspect or replay it.
-    // Named: <workflow-base>_1.json, _2.json, … (never overwrites the template).
-    let snapshotName = null;
-    try {
-      const wfBase = path.basename(WORKFLOW_FILE, '.json'); // merged-tattoo-rotator-v6
-      snapshotName = nextFilename(ROOT, wfBase, '.json');
-      fs.writeFileSync(path.join(ROOT, snapshotName), JSON.stringify(workflow, null, 2));
-      log('run-workflow: saved patched snapshot ->', snapshotName);
-    } catch (snapErr) {
-      log('run-workflow: warning – could not save snapshot:', snapErr.message);
-      // Non-fatal: snapshot failure must never abort the render.
+    if (compositePath) {
+      // Composite reference mode: the AI sees exactly where the tattoo sits.
+      // The composite was exported at full opacity so placement is unambiguous.
+      prompt = [
+        'You are given three images:',
+        '  Image 1: the original body photo (clean, no tattoo).',
+        '  Image 2: the tattoo design on a white background (black ink artwork).',
+        '  Image 3: a placement reference — Image 1 with the tattoo already composited at 100% opacity showing its exact position, rotation, scale, and orientation on the body.',
+        '',
+        'Your task: produce a photorealistic render of the tattoo permanently embedded in the skin.',
+        '',
+        'Rules — follow every one precisely:',
+        '- Match the tattoo placement EXACTLY as shown in Image 3: same position, same rotation (' + rotation + '°), same size relative to the body.',
+        '- Render the tattoo as REAL PERMANENT INK — fully opaque, rich dark black lines, NOT a semi-transparent grey ghost overlay.',
+        '- Use the exact linework, shading, and black-and-grey tones from Image 2 as the ink color source.',
+        '- The ink sits IN the skin surface: skin texture, pores, fine hairs, and natural lighting are visible ON TOP of the ink.',
+        '- Follow the 3D curvature and muscle contour of the body — the tattoo wraps around the form.',
+        '- Preserve every detail of the original body photo (colors, lighting, background) in all areas outside the tattoo.',
+        '- Do NOT add any transparency, glow, blending modes, or opacity reduction to the tattoo.',
+        '- Do NOT add borders, frames, watermarks, or backgrounds.',
+        '- Do NOT add any redness, inflammation, swelling, or irritation around the tattoo edges — the skin colour directly adjacent to the tattoo must match the surrounding skin tone exactly, as if the tattoo is fully healed.',
+        '- Return ONLY the final full body photo with the tattoo naturally embedded.',
+      ].join('\n');
+
+      parts = [
+        { text: prompt },
+        imageToBase64Part(bodyPath),
+        imageToBase64Part(tattooPath),
+        imageToBase64Part(compositePath),
+      ];
+    } else {
+      // Fallback: no composite reference, use coordinate hints only
+      prompt = [
+        'You are given two images: Image 1 is the body photo, Image 2 is the tattoo design on a white background.',
+        'Apply the tattoo as real permanent black ink onto the body photo.',
+        `Placement: centre approximately at ${payload.composite_x}px from left, ${payload.composite_y}px from top.`,
+        `Tattoo size: ${payload.width}px wide by ${payload.height}px tall.`,
+        rotation !== 0 ? `Rotation: ${rotation} degrees clockwise.` : '',
+        'The ink is fully opaque — NOT semi-transparent or grey. Use the exact dark lines from the tattoo design.',
+        'Skin texture and natural lighting show on top of the ink. Tattoo wraps around body curves.',
+        'Preserve the original body photo everywhere outside the tattoo.',
+        'Return only the final full body photo.',
+      ].filter(Boolean).join(' ');
+
+      parts = [
+        { text: prompt },
+        imageToBase64Part(bodyPath),
+        imageToBase64Part(tattooPath),
+      ];
     }
 
-    log('run-workflow: queuing prompt...');
-    const promptId = await queuePrompt(workflow);
-    log('run-workflow: prompt_id =', promptId);
+    const result = await callAI(parts);
 
-    log('run-workflow: polling for result...');
-    const result = await pollForResult(promptId, RENDER_TIMEOUT_MS);
-    const image = result.image;
-    const outputUrl = '/api/output?filename=' + encodeURIComponent(image.filename) +
-      '&subfolder=' + encodeURIComponent(image.subfolder || '') +
-      '&type=' + encodeURIComponent(image.type || 'output');
+    const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
+    const outName = nextFilename(UPLOAD_DIR, 'result', ext);
+    fs.writeFileSync(path.join(UPLOAD_DIR, outName), result.data);
+
     const elapsed = Date.now() - t0;
-    log('run-workflow: done in', elapsed, 'ms ->', image.filename);
+    log('run-workflow: done in', elapsed, 'ms ->', outName);
     sendJson(res, 200, {
       status: 'done',
-      prompt_id: promptId,
-      output_filename: image.filename,
-      output_subfolder: image.subfolder || '',
-      output_type: image.type || 'output',
-      output_url: outputUrl,
+      output_filename: outName,
+      output_url: '/uploads/' + outName,
       elapsed_ms: elapsed,
-      comfyui_url: COMFYUI_URL,
-      snapshot_file: snapshotName,   // versioned patched-workflow copy, or null on save failure
+      ai_model: AI_MODEL_NAME,
     });
   } catch (err) {
     log('run-workflow: error:', err.message);
-    if (err.stack) log(err.stack);
-    const extra = { step: 'render' };
-    if (err.comfyuiStatus) extra.comfyuiStatus = err.comfyuiStatus;
-    if (err.comfyuiNodeErrors) extra.comfyuiNodeErrors = err.comfyuiNodeErrors;
-    if (err.comfyuiResponse) extra.comfyuiResponse = err.comfyuiResponse;
-    sendError(res, 500, err.message, extra);
+    sendError(res, 500, err.message, { step: 'render' });
   }
 }
 
-async function handleOutput(req, res, urlObj) {
-  const filename = urlObj.searchParams.get('filename');
-  const subfolder = urlObj.searchParams.get('subfolder') || '';
-  const type = urlObj.searchParams.get('type') || 'output';
-  if (!filename) return sendError(res, 400, 'filename required');
-  const remote = COMFYUI_URL + '/view?filename=' + encodeURIComponent(filename) +
-    '&subfolder=' + encodeURIComponent(subfolder) +
-    '&type=' + encodeURIComponent(type);
+function handleClearUploads(req, res) {
   try {
-    const resp = await fetch(remote);
-    if (!resp.ok) return sendError(res, resp.status, 'ComfyUI /view returned ' + resp.status);
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const ct = resp.headers.get('content-type') || 'image/png';
-    const wantsDownload = urlObj.searchParams.get('download') === '1';
-    const headers = {
-      'Content-Type': ct,
-      'Content-Length': buf.length,
-      'Cache-Control': 'no-store',
-    };
-    if (wantsDownload) {
-      const safeName = filename.replace(/[\r\n"\\]/g, '_');
-      headers['Content-Disposition'] = 'attachment; filename="' + safeName + '"';
+    const files = fs.readdirSync(UPLOAD_DIR);
+    let deletedCount = 0;
+    for (const file of files) {
+      if (isAllowedUploadFilename(file)) {
+        const filePath = path.join(UPLOAD_DIR, file);
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath);
+          deletedCount++;
+        }
+      }
     }
-    res.writeHead(200, headers);
-    res.end(buf);
-  } catch (e) {
-    sendError(res, 502, 'Failed to fetch from ComfyUI: ' + e.message);
+    log('Cleared uploads directory. Deleted ' + deletedCount + ' files.');
+    sendJson(res, 200, { status: 'ok', message: 'Uploads cleared' });
+  } catch (err) {
+    log('Error clearing uploads:', err.message);
+    sendError(res, 500, err.message);
   }
 }
 
 function handleUploads(req, res, urlPath) {
   const fname = urlPath.replace(/^\/uploads\//, '');
-  if (!fname || fname.includes('..') || fname.includes('/')) {
-    res.writeHead(400); return res.end('Bad path');
+  // Strict allowlist: only serve files we generated/uploaded, never arbitrary project files
+  if (!isAllowedUploadFilename(fname)) {
+    res.writeHead(403); return res.end('Forbidden');
   }
-  // Change ROOT to UPLOAD_DIR
   const full = path.join(UPLOAD_DIR, fname);
-  if (!full.startsWith(ROOT) || !fs.existsSync(full)) {
+  if (!full.startsWith(UPLOAD_DIR) || !fs.existsSync(full)) {
     res.writeHead(404); return res.end('Not found');
   }
   const ext = path.extname(full).toLowerCase();
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+  const wantsDownload = (new URL(req.url, 'http://x').searchParams.get('download')) === '1';
+  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+  if (wantsDownload) {
+    headers['Content-Disposition'] = 'attachment; filename="' + fname.replace(/[\r\n"\\]/g, '_') + '"';
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(full).pipe(res);
 }
 
@@ -635,7 +565,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && urlPath === '/healthz') {
-      return sendJson(res, 200, { ok: true, comfyui: COMFYUI_URL });
+      return sendJson(res, 200, { ok: true, ai_model: AI_MODEL_NAME });
     }
     if (req.method === 'GET' && urlPath === '/api/status') {
       return handleStatus(res);
@@ -649,14 +579,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && urlPath === '/api/upload/steal-source') {
       return handleUpload(req, res, 'steal-source');
     }
+    if (req.method === 'POST' && urlPath === '/api/upload/composite') {
+      return handleUpload(req, res, 'composite');
+    }
     if (req.method === 'POST' && urlPath === '/api/steal-tattoo') {
       return handleStealTattoo(req, res);
     }
     if (req.method === 'POST' && urlPath === '/api/run-workflow') {
       return handleRunWorkflow(req, res);
     }
-    if (req.method === 'GET' && urlPath.indexOf('/api/output') === 0) {
-      return handleOutput(req, res, urlObj);
+    if (req.method === 'POST' && urlPath === '/api/clear-uploads') {
+      return handleClearUploads(req, res);
     }
     if (req.method === 'GET' && urlPath.indexOf('/uploads/') === 0) {
       return handleUploads(req, res, urlPath);
@@ -673,7 +606,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, function() {
   log('InkFrame widget  -> http://' + HOST + ':' + PORT);
-  log('ComfyUI target   -> ' + COMFYUI_URL);
-  log('Workflow template -> ' + WORKFLOW_FILE + (fs.existsSync(WORKFLOW_FILE) ? ' [found]' : ' [MISSING]'));
-  log('Patch script     -> ' + PATCH_SCRIPT);
+  log('AI model         -> ' + AI_MODEL_NAME);
+  log('AI API base      -> ' + AI_API_BASE_URL);
+  log('API key          -> ' + (AI_API_KEY ? '*** (set)' : '(NOT SET — add AI_PROVIDER_API_KEY to .env)'));
 });
