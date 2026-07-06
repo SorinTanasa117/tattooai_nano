@@ -3,6 +3,13 @@
   publish = "."
   functions = "netlify/functions"
 
+[build.environment]
+  # server.js is the local-only dev server (not used by Netlify Functions).
+  # Its default fallback values for PORT / RENDER_TIMEOUT_MS happen to match
+  # the literal values of the build's env vars of the same name, which trips
+  # Netlify's secrets scanner as a false positive. Skip scanning that file.
+  SECRETS_SCAN_OMIT_PATHS = "server.js"
+
 # Route every /api/* call to a Netlify Function of the same name.
 # e.g. /api/status -> netlify/functions/status.js
 [[redirects]]
