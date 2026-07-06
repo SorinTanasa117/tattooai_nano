@@ -592,6 +592,37 @@ export class PlacementCanvas {
     return this.tattooImage.getClientRect();
   }
 
+  /**
+   * Export the entire stage (body + tattoo) as a JPEG blob.
+   * The tattoo is forced to full opacity so the composite clearly shows
+   * its exact placement, rotation, and scale for use as an AI reference.
+   */
+  async getCompositeImage() {
+    if (!this.tattooImage || !this.bodyImage) return null;
+
+    const savedOpacity = this.tattooImage.opacity();
+    this.tattooImage.opacity(1.0);
+
+    // Hide all UI chrome: transformer, handles
+    const toHide = [this.transformer, this.topHandle, this.bottomHandle,
+                    this.leftHandle, this.rightHandle, this.rotateHandle];
+    toHide.forEach((n) => n && n.hide());
+
+    this.bgLayer.batchDraw();
+    this.fgLayer.batchDraw();
+
+    const dataURL = this.stage.toDataURL({ mimeType: 'image/jpeg', quality: 0.92 });
+
+    // Restore
+    this.tattooImage.opacity(savedOpacity);
+    toHide.forEach((n) => n && n.show());
+    this.bgLayer.batchDraw();
+    this.fgLayer.batchDraw();
+
+    const resp = await fetch(dataURL);
+    return resp.blob();
+  }
+
   destroy() {
     this.stage.destroy();
   }

@@ -6,6 +6,7 @@
   <title>InkFrame — Tattoo Placement Widget</title>
   <link rel="stylesheet" href="/styles.css" />
   <script src="https://unpkg.com/konva@9.3.20/konva.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -121,11 +122,11 @@
         <div class="panel-title">3 · Render</div>
         <button class="btn btn-primary" id="renderBtn" disabled>
           <span class="btn-icon">✦</span>
-          <span class="btn-text">Render in ComfyUI</span>
+          <span class="btn-text">Render</span>
         </button>
         <div class="render-progress" id="renderProgress" hidden>
           <div class="spinner"></div>
-          <div class="progress-text" id="progressText">Uploading to ComfyUI…</div>
+          <div class="progress-text" id="progressText">Preparing render…</div>
         </div>
         <div class="render-error" id="renderError" hidden></div>
       </div>
@@ -143,6 +144,24 @@
           <button class="btn btn-mini" id="rerenderBtn">Re-render</button>
         </div>
         <div class="result-meta" id="resultMeta"></div>
+      </div>
+
+      <div class="panel panel-history" id="historyPanel">
+        <div class="panel-title">5 · History</div>
+        <div class="history-actions">
+          <button class="btn btn-mini" id="bulkDownloadBtn" disabled>
+            <span class="btn-icon">↓</span>
+            <span>Download All (Zip)</span>
+          </button>
+          <button class="btn btn-mini btn-danger-outline" id="clearHistoryBtn" disabled>
+            <span>Clear History</span>
+          </button>
+        </div>
+        <div class="history-grid-container">
+          <div class="history-grid" id="historyGrid">
+            <div class="history-empty" id="historyEmpty">No past renders yet</div>
+          </div>
+        </div>
       </div>
     </aside>
   </main>
