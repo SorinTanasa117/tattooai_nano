@@ -18,7 +18,8 @@ const path = require('path');
 const { URL } = require('url');
 
 const ROOT = __dirname;
-const UPLOAD_DIR = path.join(ROOT, 'uploads');
+// Use Netlify's writable OS temporary directory if running in production
+const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : path.join(ROOT, 'uploads');
 
 // Ensure uploads directory exists
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });

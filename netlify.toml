@@ -1,0 +1,38 @@
+[build]
+  # No bundler/build step needed — the frontend is plain static files.
+  publish = "."
+  functions = "netlify/functions"
+
+# Route every /api/* call to a Netlify Function of the same name.
+# e.g. /api/status -> netlify/functions/status.js
+[[redirects]]
+  from = "/api/status"
+  to = "/.netlify/functions/status"
+  status = 200
+
+[[redirects]]
+  from = "/api/upload/:kind"
+  to = "/.netlify/functions/upload?kind=:kind"
+  status = 200
+
+[[redirects]]
+  from = "/api/steal-tattoo"
+  to = "/.netlify/functions/steal-tattoo"
+  status = 200
+
+[[redirects]]
+  from = "/api/run-workflow"
+  to = "/.netlify/functions/run-workflow"
+  status = 200
+
+[[redirects]]
+  from = "/api/clear-uploads"
+  to = "/.netlify/functions/clear-uploads"
+  status = 200
+
+# Serve stored uploads/results out of Netlify Blobs instead of a real
+# /uploads folder on disk (Netlify Functions have no persistent disk).
+[[redirects]]
+  from = "/uploads/:filename"
+  to = "/.netlify/functions/get-upload?filename=:filename"
+  status = 200
