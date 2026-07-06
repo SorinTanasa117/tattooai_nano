@@ -58,6 +58,7 @@ const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY
 const RAW_AI_MODEL_NAME = process.env.AI_MODEL_NAME || '';
 const DEFAULT_AI_MODEL_NAME = ['gemini', '3.1', 'flash', 'image'].join('-');
 const LEGACY_PREVIEW_MODEL_NAME = ['gemini', '2.5', 'flash', 'preview', '05', '20'].join('-');
+const LEGACY_IMAGE_MODEL_NAME = ['gemini', '2.5', 'flash', 'image'].join('-');
 const AI_MODEL_NAME = (!RAW_AI_MODEL_NAME || RAW_AI_MODEL_NAME === LEGACY_PREVIEW_MODEL_NAME)
   ? DEFAULT_AI_MODEL_NAME
   : RAW_AI_MODEL_NAME;
@@ -227,55 +228,20 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-/**
- * Call the AI image generation API.
- * Sends an array of parts (text + inline_data) and returns { data: Buffer, mimeType: string }.
- */
-async function callAI(parts) {
-  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
+function toInteractionInput(parts) {
+  return parts.map((part) => {
+    if (part.text) return { type: 'text', text: part.text };
+    if (part.inlineData) {
+      return { type: 'image', mime_type: part.inlineData.mimeType, data: part.inlineData.data };
+    }
+    if (part.inline_data) {
+      return { type: 'image', mime_type: part.inline_data.mime_type, data: part.inline_data.data };
+    }
+    return part;
+  });
+}
 
-  const url = `${AI_API_BASE_URL}/interactions`;
-  const reqBody = {
-    model: AI_MODEL_NAME,
-    input: parts.map((part) => {
-      if (part.text) return { type: 'text', text: part.text };
-      if (part.inlineData) {
-        return { type: 'image', mime_type: part.inlineData.mimeType, data: part.inlineData.data };
-      }
-      if (part.inline_data) {
-        return { type: 'image', mime_type: part.inline_data.mime_type, data: part.inline_data.data };
-      }
-      return part;
-    }),
-  };
-
-  let resp;
-  try {
-    resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': AI_API_KEY },
-      body: JSON.stringify(reqBody),
-      signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
-    });
-  } catch (e) {
-    throw new Error('AI API request failed: ' + e.message);
-  }
-
-  const rawText = await resp.text().catch(() => '');
-  if (!resp.ok) {
-    let detail = rawText.slice(0, 400);
-    try {
-      const parsed = JSON.parse(rawText);
-      if (parsed.error && parsed.error.message) detail = parsed.error.message;
-    } catch (_) {}
-    throw new Error('AI API error (HTTP ' + resp.status + '): ' + detail);
-  }
-
-  let parsed;
-  try { parsed = JSON.parse(rawText); } catch (_) {
-    throw new Error('AI API returned non-JSON response: ' + rawText.slice(0, 200));
-  }
-
+function extractAIResult(parsed) {
   if (parsed.output_image && parsed.output_image.data) {
     return {
       data: Buffer.from(parsed.output_image.data, 'base64'),
@@ -301,9 +267,7 @@ async function callAI(parts) {
     }
   }
 
-  // Extract the first image part from the response
-  const candidates = parsed.candidates || [];
-  for (const candidate of candidates) {
+  for (const candidate of parsed.candidates || []) {
     const responseParts = (candidate.content && candidate.content.parts) || [];
     for (const part of responseParts) {
       if (part.inlineData && part.inlineData.data) {
@@ -312,7 +276,6 @@ async function callAI(parts) {
           mimeType: part.inlineData.mimeType || 'image/png',
         };
       }
-      // Some API versions use camelCase vs snake_case
       if (part.inline_data && part.inline_data.data) {
         return {
           data: Buffer.from(part.inline_data.data, 'base64'),
@@ -322,7 +285,10 @@ async function callAI(parts) {
     }
   }
 
-  // Surface any text response for debugging
+  return null;
+}
+
+function extractAIText(parsed) {
   let textResponse = '';
   if (parsed.output_text) textResponse += parsed.output_text;
   if (parsed.outputText) textResponse += parsed.outputText;
@@ -332,12 +298,109 @@ async function callAI(parts) {
       if (block.type === 'text' && block.text) textResponse += block.text;
     }
   }
-  for (const candidate of candidates) {
+  for (const candidate of parsed.candidates || []) {
     const responseParts = (candidate.content && candidate.content.parts) || [];
     for (const part of responseParts) {
       if (part.text) textResponse += part.text;
     }
   }
+  return textResponse;
+}
+
+function parseAIError(rawText) {
+  let detail = rawText.slice(0, 400);
+  let reason = '';
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed.error && parsed.error.message) detail = parsed.error.message;
+    const details = parsed.error && parsed.error.details;
+    if (Array.isArray(details)) {
+      const info = details.find((item) => item && item.reason);
+      if (info) reason = info.reason;
+    }
+  } catch (_) {}
+  return { detail, reason };
+}
+
+function isRetryableGeminiAuthError(status, detail, reason) {
+  if (status !== 401 && status !== 403) return false;
+  return /oauth|authentication|api key|credential|unauthenticated/i.test(detail + ' ' + reason);
+}
+
+async function postJSON(url, body, headers, timeoutMs) {
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, headers || {}),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    throw new Error('AI API request failed: ' + e.message);
+  }
+
+  const rawText = await resp.text().catch(() => '');
+  return { resp, rawText };
+}
+
+/**
+ * Call the AI image generation API.
+ * Sends an array of parts (text + inline_data) and returns { data: Buffer, mimeType: string }.
+ */
+async function callAI(parts) {
+  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
+
+  const interactionUrl = `${AI_API_BASE_URL}/interactions`;
+  const interactionBody = {
+    model: AI_MODEL_NAME,
+    input: toInteractionInput(parts),
+  };
+
+  const first = await postJSON(interactionUrl, interactionBody, { 'x-goog-api-key': AI_API_KEY }, RENDER_TIMEOUT_MS);
+  if (first.resp.ok) {
+    try {
+      const parsed = JSON.parse(first.rawText);
+      const result = extractAIResult(parsed);
+      if (result) return result;
+      const textResponse = extractAIText(parsed);
+      throw new Error('AI API returned no image. ' + (textResponse ? 'Response: ' + textResponse.slice(0, 300) : 'Empty response.'));
+    } catch (err) {
+      if (/^AI API returned/.test(err.message)) throw err;
+      throw new Error('AI API returned non-JSON response: ' + first.rawText.slice(0, 200));
+    }
+  }
+
+  const firstError = parseAIError(first.rawText);
+  if (!isRetryableGeminiAuthError(first.resp.status, firstError.detail, firstError.reason)) {
+    throw new Error('AI API error (HTTP ' + first.resp.status + '): ' + firstError.detail);
+  }
+
+  const fallbackUrl = `${AI_API_BASE_URL}/models/${LEGACY_IMAGE_MODEL_NAME}:generateContent?key=${encodeURIComponent(AI_API_KEY)}`;
+  const fallbackBody = {
+    contents: [{ parts }],
+    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+  };
+
+  const fallback = await postJSON(fallbackUrl, fallbackBody, null, RENDER_TIMEOUT_MS);
+  if (!fallback.resp.ok) {
+    const fallbackError = parseAIError(fallback.rawText);
+    throw new Error(
+      'AI API authentication failed for both Gemini image endpoints. ' +
+      'Create a fresh Gemini API key in Google AI Studio, or restrict the existing key to the Generative Language API. ' +
+      'Interactions HTTP ' + first.resp.status + ': ' + firstError.detail + ' ' +
+      'Fallback HTTP ' + fallback.resp.status + ': ' + fallbackError.detail
+    );
+  }
+
+  let parsed;
+  try { parsed = JSON.parse(fallback.rawText); } catch (_) {
+    throw new Error('AI API returned non-JSON response: ' + fallback.rawText.slice(0, 200));
+  }
+
+  const result = extractAIResult(parsed);
+  if (result) return result;
+  const textResponse = extractAIText(parsed);
   throw new Error('AI API returned no image. ' + (textResponse ? 'Response: ' + textResponse.slice(0, 300) : 'Empty response.'));
 }
 
