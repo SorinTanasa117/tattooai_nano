@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+*.log
+
+# Uploaded user files
+body_*.png
+body_*.jpg
+body_*.jpeg
+body_*.webp
+tattoo_*.png
+tattoo_*.jpg
+tattoo_*.jpeg
+tattoo_*.webp
+
+# Patched workflows
+workflow-patched*.json
+payload-*.json
