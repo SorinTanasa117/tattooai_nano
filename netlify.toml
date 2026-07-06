@@ -9,6 +9,9 @@
   # the literal values of the build's env vars of the same name, which trips
   # Netlify's secrets scanner as a false positive. Skip scanning that file.
   SECRETS_SCAN_OMIT_PATHS = "server.js"
+  # AI_MODEL_NAME is configuration, not a secret; its model id may appear in
+  # serverless source or build output as a harmless default/fallback value.
+  SECRETS_SCAN_OMIT_KEYS = "AI_MODEL_NAME"
 
 # Route every /api/* call to a Netlify Function of the same name.
 # e.g. /api/status -> netlify/functions/status.js

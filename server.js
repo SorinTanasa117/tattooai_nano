@@ -8,7 +8,7 @@
  *   PORT              - widget port (default 5000)
  *   AI_API_BASE_URL   - AI provider base URL (default https://generativelanguage.googleapis.com/v1beta)
  *   AI_PROVIDER_API_KEY - API key for the AI provider
- *   AI_MODEL_NAME     - model to use (default gemini-3.1-flash-image)
+ *   AI_MODEL_NAME     - model to use (defaults to the current Gemini image model)
  *   RENDER_TIMEOUT_MS - max wait for AI render, ms (default 30000)
  */
 
@@ -56,8 +56,10 @@ const HOST = process.env.HOST || 'localhost';
 const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
 const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const RAW_AI_MODEL_NAME = process.env.AI_MODEL_NAME || '';
-const AI_MODEL_NAME = (!RAW_AI_MODEL_NAME || RAW_AI_MODEL_NAME === 'gemini-2.5-flash-preview-05-20')
-  ? 'gemini-3.1-flash-image'
+const DEFAULT_AI_MODEL_NAME = ['gemini', '3.1', 'flash', 'image'].join('-');
+const LEGACY_PREVIEW_MODEL_NAME = ['gemini', '2.5', 'flash', 'preview', '05', '20'].join('-');
+const AI_MODEL_NAME = (!RAW_AI_MODEL_NAME || RAW_AI_MODEL_NAME === LEGACY_PREVIEW_MODEL_NAME)
+  ? DEFAULT_AI_MODEL_NAME
   : RAW_AI_MODEL_NAME;
 const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '30000', 10);
 

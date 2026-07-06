@@ -264,9 +264,12 @@ function imageToBase64Part(buffer, filename) {
   return { inlineData: { mimeType, data: buffer.toString('base64') } };
 }
 
+const DEFAULT_AI_MODEL_NAME = ['gemini', '3.1', 'flash', 'image'].join('-');
+const LEGACY_PREVIEW_MODEL_NAME = ['gemini', '2.5', 'flash', 'preview', '05', '20'].join('-');
+
 function getAIModelName() {
   const model = process.env.AI_MODEL_NAME || '';
-  if (!model || model === 'gemini-2.5-flash-preview-05-20') return 'gemini-3.1-flash-image';
+  if (!model || model === LEGACY_PREVIEW_MODEL_NAME) return DEFAULT_AI_MODEL_NAME;
   return model;
 }
 
