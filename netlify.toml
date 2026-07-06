@@ -37,7 +37,7 @@
   to = "/.netlify/functions/clear-uploads"
   status = 200
 
-# Serve stored uploads/results out of Netlify Blobs instead of a real
+# Serve stored uploads/results out of Cloudflare R2 instead of a real
 # /uploads folder on disk (Netlify Functions have no persistent disk).
 [[redirects]]
   from = "/uploads/:filename"

@@ -2,11 +2,11 @@
 /**
  * Shared helpers for InkFrame's Netlify Functions.
  *
- * Storage: Netlify Blobs (a single store named "uploads") replaces the
- * old UPLOAD_DIR-on-disk approach from server.js. Blobs persist reliably
- * across separate function invocations (unlike /tmp), which is required
- * since an editing session spans several requests (upload -> steal ->
- * run-workflow), each of which may hit a different, cold Lambda instance.
+ * Storage: Cloudflare R2 replaces the old UPLOAD_DIR-on-disk approach
+ * from server.js. Objects persist reliably across separate function
+ * invocations (unlike /tmp), which is required since an editing session
+ * spans several requests (upload -> steal -> run-workflow), each of
+ * which may hit a different, cold Lambda instance.
  *
  * Nothing here touches the client-side history gallery (IndexedDB in
  * app.js) -- that already survives refresh on its own. This store only
@@ -14,7 +14,13 @@
  * which get wiped by clear-uploads.js on refresh/startup.
  */
 
-const { getStore } = require('@netlify/blobs');
+const {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+} = require('@aws-sdk/client-s3');
 
 const MIME = {
   '.png': 'image/png',
@@ -41,12 +47,112 @@ function isAllowedUploadFilename(name) {
   return UPLOAD_PATTERNS.some((re) => re.test(name));
 }
 
-// getStore() auto-detects the site ID/token from the function's execution
-// context when running on Netlify's infrastructure -- no manual config
-// needed (this differs from using @netlify/blobs outside of a Netlify
-// deploy, which would require passing siteID/token explicitly).
+let r2Client;
+
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(name + ' is not configured');
+  return value;
+}
+
+function getR2Config() {
+  return {
+    accountId: requireEnv('R2_ACCOUNT_ID'),
+    accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
+    secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
+    bucketName: requireEnv('R2_BUCKET_NAME'),
+  };
+}
+
+function getR2Client(config) {
+  if (!r2Client) {
+    r2Client = new S3Client({
+      region: 'auto',
+      endpoint: 'https://' + config.accountId + '.r2.cloudflarestorage.com',
+      credentials: {
+        accessKeyId: config.accessKeyId,
+        secretAccessKey: config.secretAccessKey,
+      },
+      forcePathStyle: true,
+    });
+  }
+  return r2Client;
+}
+
+async function streamToArrayBuffer(body) {
+  if (!body) return null;
+  if (typeof body.transformToByteArray === 'function') {
+    const bytes = await body.transformToByteArray();
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  const buffer = Buffer.concat(chunks);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+function createR2UploadsStore(config) {
+  const client = getR2Client(config);
+  const Bucket = config.bucketName;
+
+  return {
+    async get(key, options) {
+      try {
+        const result = await client.send(new GetObjectCommand({ Bucket, Key: key }));
+        const arrayBuffer = await streamToArrayBuffer(result.Body);
+        if (options && options.type === 'arrayBuffer') return arrayBuffer;
+        return Buffer.from(arrayBuffer);
+      } catch (err) {
+        if (err && (err.name === 'NoSuchKey' || err.$metadata && err.$metadata.httpStatusCode === 404)) {
+          return null;
+        }
+        throw err;
+      }
+    },
+
+    async set(key, data) {
+      const ext = extOf(key);
+      await client.send(new PutObjectCommand({
+        Bucket,
+        Key: key,
+        Body: data,
+        ContentType: MIME[ext] || 'application/octet-stream',
+        CacheControl: 'no-store',
+      }));
+    },
+
+    async list(options) {
+      const prefix = options && options.prefix ? options.prefix : undefined;
+      const blobs = [];
+      let ContinuationToken;
+
+      do {
+        const result = await client.send(new ListObjectsV2Command({
+          Bucket,
+          Prefix: prefix,
+          ContinuationToken,
+        }));
+
+        for (const item of result.Contents || []) {
+          if (item.Key) blobs.push({ key: item.Key });
+        }
+        ContinuationToken = result.NextContinuationToken;
+      } while (ContinuationToken);
+
+      return { blobs };
+    },
+
+    async delete(key) {
+      await client.send(new DeleteObjectCommand({ Bucket, Key: key }));
+    },
+  };
+}
+
 function getUploadsStore() {
-  return getStore('uploads');
+  return createR2UploadsStore(getR2Config());
 }
 
 function jsonResponse(statusCode, obj) {
@@ -75,7 +181,7 @@ function getHeader(event, name) {
   return '';
 }
 
-// Finds the next unused N for "<prefix>_N.<ext>" by listing existing blobs
+// Finds the next unused N for "<prefix>_N.<ext>" by listing existing objects
 // under that prefix. Equivalent to server.js's nextFilename(), just backed
 // by store.list() instead of fs.readdirSync().
 async function nextFilename(store, prefix, ext) {
