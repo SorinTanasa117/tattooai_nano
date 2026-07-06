@@ -1,10 +1,78 @@
 /**
  * InkFrame main UI controller.
- * Wires uploads, canvas, sliders, and the ComfyUI render pipeline.
+ * Wires uploads, canvas, sliders, and the AI render pipeline.
  */
 
 import { PlacementCanvas } from './canvas.js';
 import { buildPayload, validatePayload } from './payload.js';
+
+// IndexedDB History Database helper functions
+const DB_NAME = 'InkFrameHistoryDB';
+const STORE_NAME = 'tattoos';
+const DB_VERSION = 1;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function addTattooToHistory(blob, filename) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const item = {
+      blob: blob,
+      filename: filename,
+      timestamp: Date.now()
+    };
+    const request = store.add(item);
+    request.onsuccess = () => resolve();
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function getTattooHistory() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.getAll();
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function deleteTattooFromHistory(id) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.delete(id);
+    request.onsuccess = () => resolve();
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function clearTattooHistory() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
 
 const state = {
   bodyFile: null,
@@ -20,10 +88,8 @@ const state = {
 
 /**
  * Pre-multiply a File's alpha channel by `opacity` (0..1) and return a new
- * PNG File. This is what makes the Opacity slider actually affect the
- * ComfyUI render -- we send a baked-in faded PNG instead of relying on
- * the (unchanged) workflow graph to interpret an opacity widget that
- * ImageCompositeMasked doesn't have.
+ * PNG File. This bakes the opacity value into the tattoo image before upload
+ * so the AI render receives the correct transparency level.
  */
 async function applyOpacityToFile(file, opacity) {
   if (opacity >= 0.999) return file; // no-op at full opacity
@@ -104,6 +170,10 @@ const els = {
   canvasResultImage: $('canvasResultImage'),
   canvasResultBack: $('canvasResultBack'),
   toast: $('toast'),
+  bulkDownloadBtn: $('bulkDownloadBtn'),
+  clearHistoryBtn: $('clearHistoryBtn'),
+  historyGrid: $('historyGrid'),
+  historyEmpty: $('historyEmpty'),
 };
 
 function setStatus(label, kind) {
@@ -140,28 +210,8 @@ function showError(msg, detail) {
   head.textContent = msg;
   els.renderError.appendChild(head);
 
-  // If the server gave us structured detail, render it as a pre block
+  // If the server gave us structured detail, render it as a collapsible block
   if (detail) {
-    const hasNodes = detail.comfyui_node_errors && Object.keys(detail.comfyui_node_errors).length;
-    if (hasNodes) {
-      const sub = document.createElement('div');
-      sub.className = 'render-error-sub';
-      sub.textContent = 'ComfyUI node errors:';
-      els.renderError.appendChild(sub);
-
-      const list = document.createElement('ul');
-      list.className = 'render-error-nodes';
-      for (const nodeId of Object.keys(detail.comfyui_node_errors)) {
-        const ne = detail.comfyui_node_errors[nodeId] || {};
-        const li = document.createElement('li');
-        const cls = ne.class_type ? ' (' + ne.class_type + ')' : '';
-        li.textContent = 'node ' + nodeId + cls + ': ' + (ne.message || ne.error || JSON.stringify(ne));
-        list.appendChild(li);
-      }
-      els.renderError.appendChild(list);
-    }
-
-    // Always include a collapsible raw JSON dump for power users
     const details = document.createElement('details');
     details.className = 'render-error-details';
     const summary = document.createElement('summary');
@@ -277,8 +327,8 @@ async function onStealSourceSelected(e) {
     // 1. Upload the source photo to our server
     const uploadResult = await uploadFile(file, 'steal-source');
 
-    // 2. Run the steal pipeline on the server (ComfyUI → stolen image)
-    setStealProgress('ComfyUI is generating…');
+    // 2. Run the steal pipeline on the server (AI → stolen image)
+    setStealProgress('AI is extracting tattoo…');
     els.stealHint.textContent = 'generating…';
     const stealResp = await fetch('/api/steal-tattoo', {
       method: 'POST',
@@ -357,8 +407,6 @@ function onCanvasChange(s) { applyStateToUI(s); }
 
 function bindSlider(slider, output, prop, formatter) {
   slider.addEventListener('input', () => {
-    // Read as float for sliders that aren't whole integers (rotation is fine
-    // as int, but opacity is 0..100 -- we'll divide by 100 below).
     const v = parseFloat(slider.value);
     if (output && formatter) output.textContent = formatter(v);
     if (!els.canvas || !els.canvas.tattooImage) return;
@@ -370,25 +418,18 @@ function bindSlider(slider, output, prop, formatter) {
     } else if (prop === 'width') {
       const img = els.canvas.tattooImage.image();
       if (img) {
-        // Only adjust scaleX — the height slider controls scaleY independently.
         els.canvas.tattooImage.scaleX(v / img.naturalWidth);
       }
     } else if (prop === 'height') {
       const img = els.canvas.tattooImage.image();
       if (img) {
-        // Only adjust scaleY — the width slider controls scaleX independently.
         els.canvas.tattooImage.scaleY(v / img.naturalHeight);
       }
     } else if (prop === 'rotation') {
-      // Free rotation -- canvas.setRotation updates the Konva node AND
-      // fires onChange, so we don't need to redraw or sync sliders here.
       els.canvas.setRotation(v);
       return;
     } else if (prop === 'opacity') {
-      // Slider is 0..100; canvas wants 0..1. Same as rotation: setOpacity
-      // already fires onChange, so we return early.
       els.canvas.setOpacity(v / 100);
-      // Mirror into state so the on-upload alpha pre-multiply uses it.
       state.opacity = v / 100;
       return;
     }
@@ -408,7 +449,7 @@ async function onRender() {
   if (state.renderStatus === 'rendering') return;
   clearError();
   els.renderProgress.hidden = false;
-  setProgress('Uploading to ComfyUI…');
+  setProgress('Preparing render…');
   setStatus('Rendering…', 'rendering');
   state.renderStatus = 'rendering';
   setRenderEnabled(false);
@@ -419,53 +460,64 @@ async function onRender() {
 
     setProgress('Preparing placement…');
 
-    // Re-bake opacity into the tattoo upload if the slider has changed since
-    // the initial upload.  This ensures the ComfyUI render always reflects
-    // the current opacity value rather than whatever was baked at upload time.
+    // Always send the full-opacity tattoo design to the AI.
+    // Opacity is used for the placement overlay on screen; the AI receives
+    // the placement reference as a separate composite image (see below) and
+    // must render the tattoo as real ink at full opacity regardless of the
+    // slider value. If the current server-side file has baked-in opacity,
+    // re-upload the original at full opacity so the AI gets a clean design.
     const currentOpacity = state.opacity;
     if (
       state.tattooOriginalFile &&
-      Math.abs(currentOpacity - state.tattooUploadedOpacity) > 0.005
+      state.tattooUploadedOpacity < 0.999
     ) {
-      setProgress('Re-uploading tattoo with new opacity…');
-      const rebaked = await applyOpacityToFile(state.tattooOriginalFile, currentOpacity);
-      const reResult = await uploadFile(rebaked, 'tattoo');
+      setProgress('Preparing full-opacity tattoo for AI…');
+      const fullOpacityFile = await applyOpacityToFile(state.tattooOriginalFile, 1.0);
+      const reResult = await uploadFile(fullOpacityFile, 'tattoo');
       state.tattooFile = reResult.filename;
       state.tattooUrl = reResult.url;
-      state.tattooUploadedOpacity = currentOpacity;
+      state.tattooUploadedOpacity = 1.0;
     }
 
-    // Scale factor: display pixels → ComfyUI 1024-max space
+    // Scale factor: display pixels → 1024-max space
     const F = 1024 / Math.max(els.canvas.bodyImage.width(), els.canvas.bodyImage.height());
 
     const tattooImg = els.canvas.tattooImage;
-    const rect = tattooImg.getClientRect();   // rotated bounding box in display px (for composite position)
-    const cs   = els.canvas.getState();       // pre-rotation dimensions + rotation + opacity
+    const rect = tattooImg.getClientRect();
+    const cs   = els.canvas.getState();
 
-    // Pipeline: LoadImage → ImageScale(width, height) → RotateImage(rotation) → ImageCompositeMasked(x, y)
-    //
-    // ImageScale runs BEFORE RotateImage, so it must receive the PRE-ROTATION
-    // tattoo dimensions — i.e. the size the user set via the sliders
-    // (naturalWidth * scaleX, naturalHeight * scaleY).  cs.width/cs.height from
-    // getState() are exactly those values, in display pixels.
-    //
-    // After RotateImage the image is padded to its axis-aligned bounding box.
-    // composite_x/y must point to the top-left of that bounding box, which
-    // getClientRect() gives correctly in display pixels.
     const canvasState = {
       ready:    true,
-      x:        Math.round(rect.x * F),        // top-left of rotated bounding box → composite_x
-      y:        Math.round(rect.y * F),         // → composite_y
-      width:    Math.round(cs.width * F),       // pre-rotation slider width → ImageScale width
-      height:   Math.round(cs.height * F),      // pre-rotation slider height → ImageScale height
-      rotation: cs.rotation,                    // passed to RotateImage node
+      x:        Math.round(rect.x * F),
+      y:        Math.round(rect.y * F),
+      width:    Math.round(cs.width * F),
+      height:   Math.round(cs.height * F),
+      rotation: cs.rotation,
       opacity:  cs.opacity,
     };
 
+    // Export the canvas as a composite reference image (body + tattoo at full
+    // opacity) so the AI can see the exact placement rather than relying
+    // solely on pixel coordinates.
+    let compositeFilename = null;
+    try {
+      setProgress('Exporting placement reference…');
+      const compositeBlob = await els.canvas.getCompositeImage();
+      if (compositeBlob) {
+        const compositeFile = new File([compositeBlob], 'composite.jpg', { type: 'image/jpeg' });
+        const compositeResult = await uploadFile(compositeFile, 'composite');
+        compositeFilename = compositeResult.filename;
+      }
+    } catch (e) {
+      // Non-fatal: proceed without composite reference
+      console.warn('Composite export failed:', e);
+    }
+
     payload = buildPayload({
-      bodyFile:   state.bodyFile,
-      tattooFile: state.tattooFile,
-      state:      canvasState,
+      bodyFile:        state.bodyFile,
+      tattooFile:      state.tattooFile,
+      compositeFile:   compositeFilename,
+      state:           canvasState,
     });
     validatePayload(payload);
   } catch (e) {
@@ -481,7 +533,7 @@ async function onRender() {
   }, 600);
 
   try {
-    setProgress('ComfyUI is generating…');
+    setProgress('AI is generating…');
     const resp = await fetch('/api/run-workflow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -491,34 +543,27 @@ async function onRender() {
     clearInterval(tickerInterval);
 
     if (!resp.ok || data.status !== 'done') {
-      // data may carry comfyui_node_errors / comfyui_response from the server.
-      // Roll them into a multi-line message + attach the structured detail
-      // to the Error so finishRenderWithError can render it nicely.
-      const lines = [data.message || ('Server returned ' + resp.status)];
-      if (data.comfyui_node_errors && Object.keys(data.comfyui_node_errors).length) {
-        lines.push('');
-        lines.push('Per-node errors from ComfyUI:');
-        for (const nodeId of Object.keys(data.comfyui_node_errors)) {
-          const ne = data.comfyui_node_errors[nodeId] || {};
-          const cls = ne.class_type ? ' (' + ne.class_type + ')' : '';
-          const msg = ne.message || ne.error || JSON.stringify(ne);
-          lines.push('  node ' + nodeId + cls + ': ' + msg);
-        }
-      }
-      const err = new Error(lines.join('\n'));
-      err.detail = {
-        status: resp.status,
-        message: data.message,
-        step: data.step,
-        comfyui_node_errors: data.comfyui_node_errors || null,
-        comfyui_response: data.comfyui_response || null,
-      };
+      const err = new Error(data.message || ('Server returned ' + resp.status));
+      err.detail = { status: resp.status, message: data.message, step: data.step };
       throw err;
     }
 
     state.renderStatus = 'done';
     state.lastResult = data;
     showResult(data);
+
+    // Save to local IndexedDB history
+    try {
+      const imgResp = await fetch(data.output_url);
+      if (imgResp.ok) {
+        const imgBlob = await imgResp.blob();
+        await addTattooToHistory(imgBlob, data.output_filename);
+        await updateHistoryUI();
+      }
+    } catch (dbErr) {
+      console.warn('Failed to save render to history:', dbErr);
+    }
+
     setStatus('Done in ' + (data.elapsed_ms / 1000).toFixed(1) + 's', 'done');
     showToast('Render complete', 'ok');
   } catch (err) {
@@ -534,36 +579,35 @@ function finishRenderWithError(message, detail) {
   state.renderStatus = 'error';
   showError(message, detail);
   setStatus('Error', 'error');
-  // Keep the toast short; the panel shows the full detail.
   const shortMsg = (message || '').split('\n')[0] || 'Render failed';
   showToast(shortMsg, 'error', 5000);
   els.renderProgress.hidden = true;
   updateReadiness();
+  if (els.renderError) {
+    els.renderError.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
 function showResult(data) {
-  const cacheBust = '&_t=' + Date.now();
-  // Sidebar thumbnail + download link (existing behavior).
-  els.resultImage.src = data.output_url + cacheBust;
-  els.downloadBtn.href = data.output_url + (data.output_url.indexOf('?') >= 0 ? '&' : '?') + 'download=1';
+  const isBlob = data.output_url.startsWith('blob:');
+  const cacheBust = isBlob ? '' : ((data.output_url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now());
+  const finalUrl = data.output_url + cacheBust;
+  els.resultImage.src = finalUrl;
+
+  els.downloadBtn.href = isBlob ? data.output_url : (data.output_url + (data.output_url.indexOf('?') >= 0 ? '&' : '?') + 'download=1');
   els.downloadBtn.setAttribute('download', data.output_filename);
-  els.resultMeta.textContent =
-    'prompt ' + data.prompt_id.slice(0, 8) + ' · ' + data.output_filename +
-    ' · ' + (data.elapsed_ms / 1000).toFixed(1) + 's';
+
+  els.resultMeta.textContent = data.output_filename + (data.elapsed_ms ? ' · ' + (data.elapsed_ms / 1000).toFixed(1) + 's' : '');
   els.resultPanel.hidden = false;
-  // Replace the body+tattoo overlay with the rendered image in the main
-  // canvas area so the user sees the final result immediately without
-  // scrolling to the sidebar.
   showRenderInCanvas(data.output_url);
 }
 
 function showRenderInCanvas(outputUrl) {
-  const cacheBust = '&_t=' + Date.now();
+  const isBlob = outputUrl.startsWith('blob:');
+  const cacheBust = isBlob ? '' : ((outputUrl.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now());
   els.canvasResultImage.src = outputUrl + cacheBust;
   els.canvasResultImage.alt = 'Rendered tattoo';
   els.canvasResult.hidden = false;
-  // Hide the Konva canvas + overlay so the rendered image is the only
-  // thing visible in the canvas-pane.
   els.canvasHost.style.visibility = 'hidden';
   els.canvasOverlay.hidden = true;
 }
@@ -572,9 +616,132 @@ function hideRenderInCanvas() {
   els.canvasResult.hidden = true;
   els.canvasResultImage.removeAttribute('src');
   els.canvasHost.style.visibility = '';
-  // Re-show the overlay only if no uploads have happened yet. After
-  // uploads the overlay stays hidden, so mirror that.
   els.canvasOverlay.hidden = !!(state.bodyFile && state.tattooFile);
+}
+
+async function updateHistoryUI() {
+  const history = await getTattooHistory();
+  
+  // Clear the grid except the empty state (we'll toggle its visibility)
+  const items = els.historyGrid.querySelectorAll('.history-item');
+  items.forEach(item => item.remove());
+  
+  if (history.length === 0) {
+    els.historyEmpty.hidden = false;
+    els.bulkDownloadBtn.disabled = true;
+    els.clearHistoryBtn.disabled = true;
+    return;
+  }
+  
+  els.historyEmpty.hidden = true;
+  els.bulkDownloadBtn.disabled = false;
+  els.clearHistoryBtn.disabled = false;
+  
+  // Render history items sorted by timestamp descending
+  history.sort((a, b) => b.timestamp - a.timestamp);
+  
+  history.forEach(item => {
+    const itemEl = document.createElement('div');
+    itemEl.className = 'history-item';
+    itemEl.title = item.filename + ' - click to view';
+    
+    const imgUrl = URL.createObjectURL(item.blob);
+    const img = document.createElement('img');
+    img.src = imgUrl;
+    img.alt = item.filename;
+    itemEl.appendChild(img);
+    
+    // Actions overlay
+    const actions = document.createElement('div');
+    actions.className = 'history-item-actions';
+    
+    // Download button
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'history-btn';
+    dlBtn.innerHTML = '↓';
+    dlBtn.title = 'Download';
+    dlBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const a = document.createElement('a');
+      a.href = imgUrl;
+      a.download = item.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+    actions.appendChild(dlBtn);
+    
+    // Delete button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'history-btn history-btn-delete';
+    delBtn.innerHTML = '×';
+    delBtn.title = 'Delete from history';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      URL.revokeObjectURL(imgUrl);
+      await deleteTattooFromHistory(item.id);
+      updateHistoryUI();
+      showToast('Deleted from history', 'ok');
+    });
+    actions.appendChild(delBtn);
+    
+    itemEl.appendChild(actions);
+    
+    // Preview on click
+    itemEl.addEventListener('click', () => {
+      showResult({
+        output_url: imgUrl,
+        output_filename: item.filename,
+        elapsed_ms: 0
+      });
+      showToast('Viewing render: ' + item.filename, 'ok');
+    });
+    
+    els.historyGrid.appendChild(itemEl);
+  });
+}
+
+async function onBulkDownload() {
+  const history = await getTattooHistory();
+  if (history.length === 0) return;
+  
+  els.bulkDownloadBtn.disabled = true;
+  const originalLabel = els.bulkDownloadBtn.innerHTML;
+  els.bulkDownloadBtn.innerHTML = '<span>Creating zip...</span>';
+  
+  try {
+    const zip = new JSZip();
+    history.forEach(item => {
+      zip.file(item.filename, item.blob);
+    });
+    
+    const content = await zip.generateAsync({ type: 'blob' });
+    const zipUrl = URL.createObjectURL(content);
+    
+    const a = document.createElement('a');
+    a.href = zipUrl;
+    a.download = 'rendered_tattoos_history.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    URL.revokeObjectURL(zipUrl);
+    showToast('Bulk download completed', 'ok');
+  } catch (err) {
+    console.error('Bulk download failed:', err);
+    showToast('Bulk download failed: ' + err.message, 'error');
+  } finally {
+    els.bulkDownloadBtn.disabled = false;
+    els.bulkDownloadBtn.innerHTML = originalLabel;
+  }
+}
+
+async function onClearHistory() {
+  if (confirm('Are you sure you want to clear all past rendered tattoos from history?')) {
+    await clearTattooHistory();
+    updateHistoryUI();
+    showToast('History cleared', 'ok');
+  }
 }
 
 function init() {
@@ -586,25 +753,17 @@ function init() {
   if (els.stealBtn) els.stealBtn.addEventListener('click', onStealClicked);
   if (els.stealInput) els.stealInput.addEventListener('change', onStealSourceSelected);
 
-  // Sliders -- all wired through bindSlider(), which knows how to apply
-  // each prop to the Konva canvas (see canvas.js).
   bindSlider(els.xSlider,        els.xOut,        'x',        (v) => v);
   bindSlider(els.ySlider,        els.yOut,        'y',        (v) => v);
   bindSlider(els.widthSlider,    els.widthOut,    'width',    (v) => v + ' px');
   if (els.heightSlider && els.heightOut) {
     bindSlider(els.heightSlider, els.heightOut, 'height', (v) => v + ' px');
   }
-  // Free-rotation slider (0-359) for the new RotateImage node.
   if (els.rotationSlider && els.rotationOut) {
     bindSlider(els.rotationSlider, els.rotationOut, 'rotation', (v) => Math.round(v) + '°');
   }
-  // Opacity slider (0-100%). Drives canvas.setOpacity() AND, when a render
-  // is requested, the uploadFile step pre-multiplies the tattoo's alpha by
-  // this value so ComfyUI composites it at the chosen strength.
   if (els.opacitySlider && els.opacityOut) {
     bindSlider(els.opacitySlider, els.opacityOut, 'opacity', (v) => Math.round(v) + '%');
-    // Initialize opacity to 0.5 (50%) to match the HTML slider default.
-    // The canvas will sync to this when a tattoo is loaded.
     state.opacity = 0.5;
   }
 
@@ -660,10 +819,38 @@ function init() {
   });
   els.canvasResultBack.addEventListener('click', hideRenderInCanvas);
 
+  // History action listeners
+  if (els.bulkDownloadBtn) els.bulkDownloadBtn.addEventListener('click', onBulkDownload);
+  if (els.clearHistoryBtn) els.clearHistoryBtn.addEventListener('click', onClearHistory);
+
+  // Load past history items
+  updateHistoryUI();
+
+  // Prevent beforeunload from triggering when clicking download links
+  let isDownloading = false;
+  document.body.addEventListener('click', (e) => {
+    const target = e.target.closest('a[download], button[download], .history-btn');
+    if (target && (target.hasAttribute('download') || target.title === 'Download' || target.id === 'bulkDownloadBtn')) {
+      isDownloading = true;
+      setTimeout(() => { isDownloading = false; }, 2000);
+    }
+  });
+
+  // Clear uploads on page refresh/leave
+  window.addEventListener('beforeunload', () => {
+    if (!isDownloading) {
+      navigator.sendBeacon('/api/clear-uploads');
+    }
+  });
+
+  // Clean up uploads on startup for a fresh session
+  fetch('/api/clear-uploads', { method: 'POST' }).catch(() => {});
+
+  // Check AI readiness on load
   fetch('/api/status').then((r) => r.json()).then((s) => {
-    if (!s.workflow) {
-      setStatus('No workflow file', 'error');
-      showToast('merged-tattoo-rotator-v6.json not found in project root', 'error', 5000);
+    if (!s.ai_ready) {
+      setStatus('No API key', 'error');
+      showToast('AI_PROVIDER_API_KEY not set — add it to .env', 'error', 6000);
     }
   }).catch(() => {});
 

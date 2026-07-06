@@ -296,3 +296,104 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
   border-radius: 8px; border: 1px solid var(--line);
 }
 .steal-spinner { border-top-color: var(--warn); }
+
+/* History Panel Styling */
+.panel-history {
+  border-color: rgba(124, 92, 255, 0.2);
+}
+.history-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.btn-danger-outline {
+  border-color: rgba(255, 90, 110, 0.35);
+  color: var(--err);
+  background: transparent;
+}
+.btn-danger-outline:hover:not(:disabled) {
+  border-color: var(--err);
+  background: rgba(255, 90, 110, 0.1);
+  color: var(--err);
+}
+.history-grid-container {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.history-empty {
+  grid-column: span 3;
+  text-align: center;
+  padding: 20px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+}
+.history-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #111;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.history-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.history-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.history-item-actions {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.history-item:hover .history-item-actions {
+  opacity: 1;
+}
+.history-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 120ms ease;
+}
+.history-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.history-btn.history-btn-delete:hover {
+  background: var(--err);
+  border-color: var(--err);
+  color: white;
+}
+.history-grid-container::-webkit-scrollbar { width: 4px; }
+.history-grid-container::-webkit-scrollbar-track { background: transparent; }
+.history-grid-container::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+.history-grid-container::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+

@@ -2,10 +2,10 @@
  * Build, validate, and download the placement payload.
  *
  * Schema v3 (current):
- *   - rotation: free integer 0..359 (RotateImage accepts any int)
+ *   - rotation: free integer 0..359
  *   - opacity:  0..1 (pre-multiplied into the tattoo alpha client-side
- *              before upload -- see app.js applyOpacityToTattoo)
- *   - composite_x, composite_y: pixel offsets for ImageCompositeMasked
+ *              before upload -- see app.js applyOpacityToFile)
+ *   - composite_x, composite_y: pixel offsets for tattoo placement
  *   - width, height: target render size for the tattoo
  *
  * Removed: shear, counter_clockwise, scale_method (no longer exposed).
@@ -25,6 +25,7 @@ export function buildPayload(opts) {
     schema_version: 3,
     body_filename: bodyFile,
     tattoo_filename: tattooFile,
+    composite_filename: opts.compositeFile || null,
     composite_x: s.x,
     composite_y: s.y,
     rotation: s.rotation,
