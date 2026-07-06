@@ -36,7 +36,9 @@ exports.handler = async function (event) {
   if (!sourceArrayBuffer) return errorResponse(400, 'Source file not found: ' + source_filename);
   const sourceBuffer = Buffer.from(sourceArrayBuffer);
 
-  if (!process.env.AI_PROVIDER_API_KEY) return errorResponse(500, 'AI_PROVIDER_API_KEY is not configured');
+  if (!(process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)) {
+    return errorResponse(500, 'AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not configured');
+  }
 
   try {
     const parts = [

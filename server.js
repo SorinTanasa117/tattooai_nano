@@ -8,7 +8,7 @@
  *   PORT              - widget port (default 5000)
  *   AI_API_BASE_URL   - AI provider base URL (default https://generativelanguage.googleapis.com/v1beta)
  *   AI_PROVIDER_API_KEY - API key for the AI provider
- *   AI_MODEL_NAME     - model to use (default gemini-2.5-flash-preview-05-20)
+ *   AI_MODEL_NAME     - model to use (default gemini-3.1-flash-image)
  *   RENDER_TIMEOUT_MS - max wait for AI render, ms (default 30000)
  */
 
@@ -54,8 +54,11 @@ if (!process.env.NETLIFY && !fs.existsSync(UPLOAD_DIR)) {
 const PORT = parseInt(process.env.PORT || '5173', 10);
 const HOST = process.env.HOST || 'localhost';
 const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
-const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || '';
-const AI_MODEL_NAME = process.env.AI_MODEL_NAME || 'gemini-2.5-flash-preview-05-20';
+const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const RAW_AI_MODEL_NAME = process.env.AI_MODEL_NAME || '';
+const AI_MODEL_NAME = (!RAW_AI_MODEL_NAME || RAW_AI_MODEL_NAME === 'gemini-2.5-flash-preview-05-20')
+  ? 'gemini-3.1-flash-image'
+  : RAW_AI_MODEL_NAME;
 const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '30000', 10);
 
 const MIME = {
@@ -227,19 +230,28 @@ function serveStatic(req, res, urlPath) {
  * Sends an array of parts (text + inline_data) and returns { data: Buffer, mimeType: string }.
  */
 async function callAI(parts) {
-  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY is not set in environment');
+  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
 
-  const url = `${AI_API_BASE_URL}/models/${AI_MODEL_NAME}:generateContent?key=${AI_API_KEY}`;
+  const url = `${AI_API_BASE_URL}/interactions`;
   const reqBody = {
-    contents: [{ parts }],
-    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+    model: AI_MODEL_NAME,
+    input: parts.map((part) => {
+      if (part.text) return { type: 'text', text: part.text };
+      if (part.inlineData) {
+        return { type: 'image', mime_type: part.inlineData.mimeType, data: part.inlineData.data };
+      }
+      if (part.inline_data) {
+        return { type: 'image', mime_type: part.inline_data.mime_type, data: part.inline_data.data };
+      }
+      return part;
+    }),
   };
 
   let resp;
   try {
     resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': AI_API_KEY },
       body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
     });
@@ -260,6 +272,31 @@ async function callAI(parts) {
   let parsed;
   try { parsed = JSON.parse(rawText); } catch (_) {
     throw new Error('AI API returned non-JSON response: ' + rawText.slice(0, 200));
+  }
+
+  if (parsed.output_image && parsed.output_image.data) {
+    return {
+      data: Buffer.from(parsed.output_image.data, 'base64'),
+      mimeType: parsed.output_image.mime_type || 'image/png',
+    };
+  }
+  if (parsed.outputImage && parsed.outputImage.data) {
+    return {
+      data: Buffer.from(parsed.outputImage.data, 'base64'),
+      mimeType: parsed.outputImage.mimeType || 'image/png',
+    };
+  }
+
+  for (const step of parsed.steps || []) {
+    if (step.type !== 'model_output') continue;
+    for (const block of step.content || []) {
+      if (block.type === 'image' && block.data) {
+        return {
+          data: Buffer.from(block.data, 'base64'),
+          mimeType: block.mime_type || 'image/png',
+        };
+      }
+    }
   }
 
   // Extract the first image part from the response
@@ -285,6 +322,14 @@ async function callAI(parts) {
 
   // Surface any text response for debugging
   let textResponse = '';
+  if (parsed.output_text) textResponse += parsed.output_text;
+  if (parsed.outputText) textResponse += parsed.outputText;
+  for (const step of parsed.steps || []) {
+    if (step.type !== 'model_output') continue;
+    for (const block of step.content || []) {
+      if (block.type === 'text' && block.text) textResponse += block.text;
+    }
+  }
   for (const candidate of candidates) {
     const responseParts = (candidate.content && candidate.content.parts) || [];
     for (const part of responseParts) {
@@ -373,7 +418,7 @@ async function handleStealTattoo(req, res) {
     return sendError(res, 400, 'Source file not found: ' + source_filename);
 
   if (!AI_API_KEY)
-    return sendError(res, 500, 'AI_PROVIDER_API_KEY is not configured');
+    return sendError(res, 500, 'AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not configured');
 
   try {
     log('steal-tattoo: calling AI to extract tattoo from', source_filename);
@@ -444,7 +489,7 @@ async function handleRunWorkflow(req, res) {
   if (!fs.existsSync(tattooPath)) return sendError(res, 400, 'Tattoo file not found: ' + payload.tattoo_filename);
 
   if (!AI_API_KEY)
-    return sendError(res, 500, 'AI_PROVIDER_API_KEY is not configured');
+    return sendError(res, 500, 'AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not configured');
 
   try {
     log('run-workflow: calling AI to render tattoo' + (compositePath ? ' (with composite reference)' : '') + '...');

@@ -264,28 +264,43 @@ function imageToBase64Part(buffer, filename) {
   return { inlineData: { mimeType, data: buffer.toString('base64') } };
 }
 
+function getAIModelName() {
+  const model = process.env.AI_MODEL_NAME || '';
+  if (!model || model === 'gemini-2.5-flash-preview-05-20') return 'gemini-3.1-flash-image';
+  return model;
+}
+
 /**
- * Call the AI image generation API. Identical logic to server.js's callAI.
+ * Call the Gemini image generation API through the current Interactions API.
  */
 async function callAI(parts) {
   const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
-  const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || '';
-  const AI_MODEL_NAME = process.env.AI_MODEL_NAME || 'gemini-2.5-flash-preview-05-20';
+  const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+  const AI_MODEL_NAME = getAIModelName();
   const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '25000', 10);
 
-  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY is not set in environment');
+  if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
 
-  const url = `${AI_API_BASE_URL}/models/${AI_MODEL_NAME}:generateContent?key=${AI_API_KEY}`;
+  const url = `${AI_API_BASE_URL}/interactions`;
   const reqBody = {
-    contents: [{ parts }],
-    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
+    model: AI_MODEL_NAME,
+    input: parts.map((part) => {
+      if (part.text) return { type: 'text', text: part.text };
+      if (part.inlineData) {
+        return { type: 'image', mime_type: part.inlineData.mimeType, data: part.inlineData.data };
+      }
+      if (part.inline_data) {
+        return { type: 'image', mime_type: part.inline_data.mime_type, data: part.inline_data.data };
+      }
+      return part;
+    }),
   };
 
   let resp;
   try {
     resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': AI_API_KEY },
       body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
     });
@@ -310,6 +325,24 @@ async function callAI(parts) {
     throw new Error('AI API returned non-JSON response: ' + rawText.slice(0, 200));
   }
 
+  if (parsed.output_image && parsed.output_image.data) {
+    return { data: Buffer.from(parsed.output_image.data, 'base64'), mimeType: parsed.output_image.mime_type || 'image/png' };
+  }
+  if (parsed.outputImage && parsed.outputImage.data) {
+    return { data: Buffer.from(parsed.outputImage.data, 'base64'), mimeType: parsed.outputImage.mimeType || 'image/png' };
+  }
+
+  for (const step of parsed.steps || []) {
+    if (step.type !== 'model_output') continue;
+    for (const block of step.content || []) {
+      if (block.type === 'image' && block.data) {
+        return { data: Buffer.from(block.data, 'base64'), mimeType: block.mime_type || 'image/png' };
+      }
+    }
+  }
+
+  // Legacy generateContent response fallback, useful if AI_API_BASE_URL is
+  // intentionally pointed at an older compatible service in local testing.
   const candidates = parsed.candidates || [];
   for (const candidate of candidates) {
     const responseParts = (candidate.content && candidate.content.parts) || [];
@@ -324,6 +357,14 @@ async function callAI(parts) {
   }
 
   let textResponse = '';
+  if (parsed.output_text) textResponse += parsed.output_text;
+  if (parsed.outputText) textResponse += parsed.outputText;
+  for (const step of parsed.steps || []) {
+    if (step.type !== 'model_output') continue;
+    for (const block of step.content || []) {
+      if (block.type === 'text' && block.text) textResponse += block.text;
+    }
+  }
   for (const candidate of candidates) {
     const responseParts = (candidate.content && candidate.content.parts) || [];
     for (const part of responseParts) {
@@ -344,5 +385,6 @@ module.exports = {
   nextFilename,
   parseMultipartEvent,
   imageToBase64Part,
+  getAIModelName,
   callAI,
 };
