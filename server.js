@@ -426,7 +426,7 @@ async function handleStealTattoo(req, res) {
   if (!isStealSourceFilename(source_filename))
     return sendError(res, 400, 'Invalid source_filename: must be a steal-source upload (steal_src_N.ext)');
 
-  const sourcePath = path.join(ROOT, source_filename);
+  const sourcePath = path.join(UPLOAD_DIR, source_filename);
   if (!fs.existsSync(sourcePath))
     return sendError(res, 400, 'Source file not found: ' + source_filename);
 
@@ -510,8 +510,9 @@ async function handleRunWorkflow(req, res) {
   if (!isSafeFilename(payload.tattoo_filename))
     return sendError(res, 400, 'Invalid tattoo_filename: must be a plain filename with no path components');
 
-  const bodyPath = path.join(ROOT, payload.body_filename);
-  const tattooPath = path.join(ROOT, payload.tattoo_filename);
+// Change ROOT to UPLOAD_DIR
+  const bodyPath = path.join(UPLOAD_DIR, payload.body_filename);
+  const tattooPath = path.join(UPLOAD_DIR, payload.tattoo_filename);
   if (!fs.existsSync(bodyPath)) return sendError(res, 400, 'Body file not found: ' + payload.body_filename);
   if (!fs.existsSync(tattooPath)) return sendError(res, 400, 'Tattoo file not found: ' + payload.tattoo_filename);
 
@@ -618,7 +619,8 @@ function handleUploads(req, res, urlPath) {
   if (!fname || fname.includes('..') || fname.includes('/')) {
     res.writeHead(400); return res.end('Bad path');
   }
-  const full = path.join(ROOT, fname);
+  // Change ROOT to UPLOAD_DIR
+  const full = path.join(UPLOAD_DIR, fname);
   if (!full.startsWith(ROOT) || !fs.existsSync(full)) {
     res.writeHead(404); return res.end('Not found');
   }
