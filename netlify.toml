@@ -3,6 +3,13 @@
   publish = "."
   functions = "netlify/functions"
 
+[build.environment]
+  # server.js is the local-only dev server (not used by Netlify Functions).
+  # Its default fallback values for PORT / RENDER_TIMEOUT_MS happen to match
+  # the literal values of the build's env vars of the same name, which trips
+  # Netlify's secrets scanner as a false positive. Skip scanning that file.
+  SECRETS_SCAN_OMIT_PATHS = "server.js"
+
 # Route every /api/* call to a Netlify Function of the same name.
 # e.g. /api/status -> netlify/functions/status.js
 [[redirects]]
@@ -30,7 +37,7 @@
   to = "/.netlify/functions/clear-uploads"
   status = 200
 
-# Serve stored uploads/results out of Netlify Blobs instead of a real
+# Serve stored uploads/results out of Cloudflare R2 instead of a real
 # /uploads folder on disk (Netlify Functions have no persistent disk).
 [[redirects]]
   from = "/uploads/:filename"
