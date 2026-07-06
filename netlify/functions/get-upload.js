@@ -2,6 +2,19 @@
 
 const { getUploadsStore, isAllowedUploadFilename, extOf, MIME } = require('./_lib');
 
+function getUploadFilename(event) {
+  const queryFilename = event.queryStringParameters && event.queryStringParameters.filename;
+  if (queryFilename) return queryFilename;
+
+  const candidates = [event.rawUrl, event.path].filter(Boolean);
+  for (const value of candidates) {
+    const match = /\/uploads\/([^/?#]+)/.exec(value);
+    if (match) return decodeURIComponent(match[1]);
+  }
+
+  return '';
+}
+
 // Serves GET /uploads/:filename by reading the blob out of the "uploads"
 // store. Netlify Functions have no persistent disk, so this replaces
 // server.js's handleUploads() (which streamed from UPLOAD_DIR on disk).
@@ -10,7 +23,7 @@ exports.handler = async function (event) {
     return { statusCode: 405, body: 'Method not allowed' };
   }
 
-  const fname = (event.queryStringParameters && event.queryStringParameters.filename) || '';
+  const fname = getUploadFilename(event);
 
   // Strict allowlist: only ever serve files matching our generated patterns.
   if (!isAllowedUploadFilename(fname)) {
