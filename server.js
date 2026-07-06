@@ -22,11 +22,14 @@ const ROOT = __dirname;
 // Netlify uses a read-only filesystem except for the system /tmp directory
 const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : path.join(ROOT, 'uploads');
 
-// Only run mkdir Sync if we aren't in a flat, shared folder like /tmp
+// Only try to run mkdir if we aren't using a global temporary system directory
 if (!process.env.NETLIFY && !fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  } catch (err) {
+    console.error("Warning: Failed to create upload directory locally:", err.message);
+  }
 }
-
 
 // Load .env from project root (no npm deps required)
 (function loadDotEnv() {
