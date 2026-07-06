@@ -20,6 +20,8 @@ const { URL } = require('url');
 const { guiToPrompt } = require('./scripts/gui_to_prompt.js');
 
 const ROOT = __dirname;
+// Netlify allows writing files ONLY inside the OS /tmp directory
+const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : ROOT;
 const PORT = parseInt(process.env.PORT || '5173', 10);
 const HOST = process.env.HOST || 'localhost';
 const COMFYUI_URL = (process.env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '');
@@ -371,7 +373,8 @@ async function handleUpload(req, res, kind) {
     return sendError(res, 400, 'Expected multipart/form-data');
   }
   try {
-    const result = await parseMultipart(req, ct, ROOT, prefix);
+try {
+    const result = await parseMultipart(req, ct, UPLOAD_DIR, prefix); // <-- NEW
     log('upload ' + kind + ':', result.filename, '(' + result.size + ' bytes)');
     sendJson(res, 200, {
       status: 'ok',
