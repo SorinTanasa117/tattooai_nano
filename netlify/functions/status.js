@@ -1,6 +1,6 @@
 'use strict';
 
-const { getUploadsStore, jsonResponse, errorResponse } = require('./_lib');
+const { getUploadsStore, jsonResponse, errorResponse, getAIModelName } = require('./_lib');
 
 exports.handler = async function (event) {
   if (event.httpMethod !== 'GET') return errorResponse(405, 'Method not allowed');
@@ -16,8 +16,8 @@ exports.handler = async function (event) {
       status: 'ok',
       bodies: bodies.map((f) => ({ filename: f, url: '/uploads/' + f })),
       tattoos: tattoos.map((f) => ({ filename: f, url: '/uploads/' + f })),
-      ai_model: process.env.AI_MODEL_NAME || 'gemini-2.5-flash-preview-05-20',
-      ai_ready: !!process.env.AI_PROVIDER_API_KEY,
+      ai_model: getAIModelName(),
+      ai_ready: !!(process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY),
     });
   } catch (err) {
     return errorResponse(500, err.message);

@@ -8,6 +8,7 @@ const {
   imageToBase64Part,
   callAI,
   nextFilename,
+  getAIModelName,
 } = require('./_lib');
 
 exports.handler = async function (event) {
@@ -66,7 +67,9 @@ exports.handler = async function (event) {
   const bodyBuffer = Buffer.from(bodyArrayBuffer);
   const tattooBuffer = Buffer.from(tattooArrayBuffer);
 
-  if (!process.env.AI_PROVIDER_API_KEY) return errorResponse(500, 'AI_PROVIDER_API_KEY is not configured');
+  if (!(process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY)) {
+    return errorResponse(500, 'AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not configured');
+  }
 
   try {
     const rotation = payload.rotation || 0;
@@ -134,7 +137,7 @@ exports.handler = async function (event) {
       output_filename: outName,
       output_url: '/uploads/' + outName,
       elapsed_ms: elapsed,
-      ai_model: process.env.AI_MODEL_NAME || 'gemini-2.5-flash-preview-05-20',
+      ai_model: getAIModelName(),
     });
   } catch (err) {
     return errorResponse(500, err.message, { step: 'render' });
