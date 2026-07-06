@@ -18,8 +18,23 @@
   status = 200
 
 [[redirects]]
-  from = "/api/upload/:kind"
-  to = "/.netlify/functions/upload?kind=:kind"
+  from = "/api/upload/body"
+  to = "/.netlify/functions/upload?kind=body"
+  status = 200
+
+[[redirects]]
+  from = "/api/upload/tattoo"
+  to = "/.netlify/functions/upload?kind=tattoo"
+  status = 200
+
+[[redirects]]
+  from = "/api/upload/steal-source"
+  to = "/.netlify/functions/upload?kind=steal-source"
+  status = 200
+
+[[redirects]]
+  from = "/api/upload/composite"
+  to = "/.netlify/functions/upload?kind=composite"
   status = 200
 
 [[redirects]]

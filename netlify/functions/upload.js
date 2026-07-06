@@ -13,10 +13,23 @@ const {
 
 const PREFIX_MAP = { body: 'body', tattoo: 'tattoo', 'steal-source': 'steal_src', composite: 'composite' };
 
+function getUploadKind(event) {
+  const queryKind = event.queryStringParameters && event.queryStringParameters.kind;
+  if (queryKind) return queryKind;
+
+  const candidates = [event.rawUrl, event.path, event.headers && event.headers.referer].filter(Boolean);
+  for (const value of candidates) {
+    const match = /\/api\/upload\/([^/?#]+)/.exec(value);
+    if (match) return decodeURIComponent(match[1]);
+  }
+
+  return '';
+}
+
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') return errorResponse(405, 'Method not allowed');
 
-  const kind = (event.queryStringParameters && event.queryStringParameters.kind) || '';
+  const kind = getUploadKind(event);
   const prefix = PREFIX_MAP[kind];
   if (!prefix) return errorResponse(400, 'Unknown upload kind: ' + kind);
 
