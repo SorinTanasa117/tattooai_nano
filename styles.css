@@ -241,6 +241,38 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 .sidebar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 .sidebar::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
+/* ── Mobile layout ────────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 52vw 1fr;
+    height: auto;
+    min-height: calc(100vh - 52px);
+  }
+
+  .canvas-pane {
+    min-height: 52vw;
+  }
+
+  .sidebar {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    overflow-y: visible;
+    max-height: none;
+  }
+
+  /* history grid stays scrollable internally */
+  .history-grid-container {
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  /* slightly larger tap targets on small screens */
+  .slider-step { width: 28px; height: 28px; }
+
+  .brand .tag { display: none; }
+}
+
 .canvas-result {
   position: absolute; inset: 0;
   display: flex; flex-direction: column;
@@ -397,3 +429,35 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 .history-grid-container::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
 .history-grid-container::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
+
+/* ── Mobile layout ────────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: clamp(240px, 45vh, 420px) 1fr;
+    height: auto;
+    min-height: calc(100vh - 52px);
+  }
+
+  .canvas-pane {
+    min-height: clamp(240px, 45vh, 420px);
+  }
+
+  .sidebar {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    overflow-y: visible;
+    max-height: none;
+  }
+
+  /* history grid stays scrollable internally */
+  .history-grid-container {
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  /* slightly larger tap targets on small screens */
+  .slider-step { width: 28px; height: 28px; }
+
+  .brand .tag { display: none; }
+}
