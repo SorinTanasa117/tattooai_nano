@@ -9,6 +9,7 @@ const {
   callAI,
   nextFilename,
   getAIModelName,
+  getPublicUrl,
 } = require('./_lib');
 
 exports.handler = async function (event) {
@@ -92,7 +93,7 @@ exports.handler = async function (event) {
         '- The ink sits IN the skin surface: skin texture, pores, fine hairs, and natural lighting are visible ON TOP of the ink.',
         '- Follow the 3D curvature and muscle contour of the body — the tattoo wraps around the form.',
         '- Preserve every detail of the original body photo (colors, lighting, background) in all areas outside the tattoo.',
-        '- Add the appropriate tattoo feel to the original tattoo image such as skin sheen, slight ink absorption, and subtle color saturation changes around the tattoo edges.',
+        '- Do NOT add any transparency, glow, blending modes, or opacity reduction to the tattoo.',
         '- Do NOT add borders, frames, watermarks, or backgrounds.',
         '- Do NOT add any redness, inflammation, swelling, or irritation around the tattoo edges — the skin colour directly adjacent to the tattoo must match the surrounding skin tone exactly, as if the tattoo is fully healed.',
         '- Return ONLY the final full body photo with the tattoo naturally embedded.',
@@ -135,7 +136,7 @@ exports.handler = async function (event) {
     return jsonResponse(200, {
       status: 'done',
       output_filename: outName,
-      output_url: '/uploads/' + outName,
+      output_url: getPublicUrl(outName),
       elapsed_ms: elapsed,
       ai_model: getAIModelName(),
     });

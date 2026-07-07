@@ -472,13 +472,18 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 @media (max-width: 767px) {
   .layout {
     grid-template-columns: 1fr;
+    /* vh fallback for browsers without svh support */
     grid-template-rows: clamp(240px, 45vh, 420px) 1fr;
+    /* svh = small viewport height — constant even when iOS address bar
+       hides on scroll, preventing the canvas from resizing mid-session */
+    grid-template-rows: clamp(240px, 45svh, 420px) 1fr;
     height: auto;
     min-height: calc(100vh - 52px);
   }
 
   .canvas-pane {
     min-height: clamp(240px, 45vh, 420px);
+    min-height: clamp(240px, 45svh, 420px);
   }
 
   .sidebar {
