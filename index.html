@@ -157,10 +157,14 @@
             <span>Clear History</span>
           </button>
         </div>
-        <div class="history-grid-container">
-          <div class="history-grid" id="historyGrid">
-            <div class="history-empty" id="historyEmpty">No past renders yet</div>
+        <div class="history-carousel">
+          <button class="history-arrow history-arrow-prev" id="historyPrev" aria-label="Previous render">&#8249;</button>
+          <div class="history-grid-container" id="historyGridContainer">
+            <div class="history-grid" id="historyGrid">
+              <div class="history-empty" id="historyEmpty">No past renders yet</div>
+            </div>
           </div>
+          <button class="history-arrow history-arrow-next" id="historyNext" aria-label="Next render">&#8250;</button>
         </div>
       </div>
     </aside>

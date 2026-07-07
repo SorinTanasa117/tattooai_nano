@@ -261,10 +261,48 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
     max-height: none;
   }
 
-  /* history grid stays scrollable internally */
+  /* history carousel – horizontal strip */
+  .history-carousel { padding: 0 20px; }
+  .history-arrow { display: flex; }
   .history-grid-container {
-    max-height: 220px;
-    overflow-y: auto;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+  }
+  .history-grid-container::-webkit-scrollbar { display: none; }
+  .history-grid {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    width: max-content;
+    gap: 10px;
+  }
+  .history-empty {
+    width: calc(100vw - 80px);
+    grid-column: unset;
+  }
+  .history-item {
+    width: 140px;
+    height: 140px;
+    aspect-ratio: auto;
+    flex-shrink: 0;
+  }
+  /* always show action overlay on touch – no hover needed */
+  .history-item-actions {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.52);
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 10px;
+    gap: 10px;
+  }
+  .history-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    font-size: 18px;
   }
 
   /* slightly larger tap targets on small screens */
@@ -461,3 +499,32 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 
   .brand .tag { display: none; }
 }
+
+/* ── History carousel (arrows — hidden on desktop) ───────────────────────── */
+.history-carousel {
+  position: relative;
+}
+.history-arrow {
+  display: none; /* shown only on mobile via media query below */
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.history-arrow:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.history-arrow:disabled { opacity: 0.25; pointer-events: none; }
+.history-arrow-prev { left: -14px; }
+.history-arrow-next { right: -14px; }
+

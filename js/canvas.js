@@ -22,6 +22,22 @@ function rotateVector(x, y, degrees) {
   };
 }
 
+/**
+ * Convert a data URL to a Blob without using fetch().
+ * fetch(dataURL) throws "The string did not match the expected pattern."
+ * on iOS Safari because WebKit's fetch() rejects the data: scheme.
+ */
+function dataURLtoBlob(dataURL) {
+  const comma = dataURL.indexOf(',');
+  const meta  = dataURL.slice(0, comma);         // e.g. "data:image/jpeg;base64"
+  const b64   = dataURL.slice(comma + 1);
+  const mime  = (meta.match(/:(.*?);/) || [])[1] || 'image/jpeg';
+  const bin   = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
 export class PlacementCanvas {
   constructor(hostId) {
     this.host = document.getElementById(hostId);
@@ -582,9 +598,7 @@ export class PlacementCanvas {
     this.fgLayer.batchDraw();
     this.bgLayer.batchDraw();
 
-    const res = await fetch(dataURL);
-    const blob = await res.blob();
-    return blob;
+    return dataURLtoBlob(dataURL);
   }
 
   getTransformedTattooRect() {
@@ -619,8 +633,7 @@ export class PlacementCanvas {
     this.bgLayer.batchDraw();
     this.fgLayer.batchDraw();
 
-    const resp = await fetch(dataURL);
-    return resp.blob();
+    return dataURLtoBlob(dataURL);
   }
 
   destroy() {

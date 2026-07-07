@@ -174,6 +174,9 @@ const els = {
   clearHistoryBtn: $('clearHistoryBtn'),
   historyGrid: $('historyGrid'),
   historyEmpty: $('historyEmpty'),
+  historyGridContainer: $('historyGridContainer'),
+  historyPrev: $('historyPrev'),
+  historyNext: $('historyNext'),
 };
 
 function setStatus(label, kind) {
@@ -822,6 +825,19 @@ function init() {
   // History action listeners
   if (els.bulkDownloadBtn) els.bulkDownloadBtn.addEventListener('click', onBulkDownload);
   if (els.clearHistoryBtn) els.clearHistoryBtn.addEventListener('click', onClearHistory);
+
+  // Mobile carousel arrows
+  const SCROLL_PX = 158; // item width (140) + gap (10) + a little extra
+  if (els.historyPrev) {
+    els.historyPrev.addEventListener('click', () => {
+      els.historyGridContainer.scrollBy({ left: -SCROLL_PX, behavior: 'smooth' });
+    });
+  }
+  if (els.historyNext) {
+    els.historyNext.addEventListener('click', () => {
+      els.historyGridContainer.scrollBy({ left: SCROLL_PX, behavior: 'smooth' });
+    });
+  }
 
   // Load past history items
   updateHistoryUI();
