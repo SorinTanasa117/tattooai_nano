@@ -79,37 +79,20 @@ export class PlacementCanvas {
   }
 
   _applyResize() {
+    // If a body image is already loaded the stage size was set exactly in
+    // loadBody() to match the fitted image.  Changing it here would move the
+    // tattoo's apparent position relative to the body (Konva coordinates are
+    // absolute — they don't scale when the stage resizes).  So once a body is
+    // present, leave the stage completely alone; the canvas-pane clips or
+    // centres it via CSS overflow.
+    if (this.bodyImage) return;
+
+    // No body yet — track the empty container so the initial fit is right.
     const w = this.host.clientWidth;
     const h = this.host.clientHeight;
-
-    // On iOS Safari, scrolling shows/hides the address bar which fires
-    // resize events. These produce a height delta of ~50-80 px with no
-    // width change. Ignore them so the canvas does not re-fit and warp
-    // or clip the tattoo while the user is scrolling to the Render button.
-    // NOTE: compare against _lastHostSize (raw viewport dims), NOT _stageSize
-    // (which stores the fitted image dims and differs on most aspect ratios).
-    const prevHost = this._lastHostSize;
-    if (prevHost && Math.abs(w - prevHost.w) < 5 && Math.abs(h - prevHost.h) < 100) return;
-    this._lastHostSize = { w, h };
-
-    if (this.bodyImage && this.bodyNaturalDims) {
-      // Body is loaded: re-fit it to the new host size so proportions
-      // stay correct instead of just stretching the canvas.
-      const scale = Math.min(w / this.bodyNaturalDims.width,
-                             h / this.bodyNaturalDims.height, 1);
-      const dispW = Math.round(this.bodyNaturalDims.width  * scale);
-      const dispH = Math.round(this.bodyNaturalDims.height * scale);
-      this.bodyImage.width(dispW);
-      this.bodyImage.height(dispH);
-      this.stage.width(dispW);
-      this.stage.height(dispH);
-      this._stageSize = { w: dispW, h: dispH };
-    } else {
-      this.stage.width(w);
-      this.stage.height(h);
-      this._stageSize = { w, h };
-    }
-    this.updateHandles();
+    this.stage.width(w);
+    this.stage.height(h);
+    this._stageSize = { w, h };
     this.stage.batchDraw();
   }
 
