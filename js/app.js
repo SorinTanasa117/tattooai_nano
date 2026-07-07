@@ -843,8 +843,6 @@ function init() {
     }
   });
 
-  // Clean up uploads on startup for a fresh session
-  fetch('/api/clear-uploads', { method: 'POST' }).catch(() => {});
 
   // Check AI readiness on load
   fetch('/api/status').then((r) => r.json()).then((s) => {

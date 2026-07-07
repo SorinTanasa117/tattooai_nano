@@ -52,7 +52,7 @@ if (!process.env.NETLIFY && !fs.existsSync(UPLOAD_DIR)) {
   }
 })();
 const PORT = parseInt(process.env.PORT || '5173', 10);
-const HOST = process.env.HOST || 'localhost';
+const HOST = process.env.HOST || '0.0.0.0';
 const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
 const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const RAW_AI_MODEL_NAME = process.env.AI_MODEL_NAME || '';
