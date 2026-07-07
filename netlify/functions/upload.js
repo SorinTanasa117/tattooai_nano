@@ -9,6 +9,7 @@ const {
   nextFilename,
   extOf,
   getHeader,
+  getPublicUrl,
 } = require('./_lib');
 
 const PREFIX_MAP = { body: 'body', tattoo: 'tattoo', 'steal-source': 'steal_src', composite: 'composite' };
@@ -56,7 +57,7 @@ exports.handler = async function (event) {
       filename: finalName,
       originalName,
       size: data.length,
-      url: '/uploads/' + finalName,
+      url: getPublicUrl(finalName),
     });
   } catch (err) {
     return errorResponse(400, err.message);

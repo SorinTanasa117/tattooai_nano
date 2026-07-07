@@ -442,8 +442,24 @@ async function callAI(parts) {
   throw new Error('AI API returned no image. ' + (textResponse ? 'Response: ' + textResponse.slice(0, 300) : 'Empty response.'));
 }
 
+
+/**
+ * Return a public-facing URL for a stored file.
+ * If R2_PUBLIC_URL is set (e.g. "https://pub-xxx.r2.dev" or a custom
+ * Cloudflare domain), images are served directly from Cloudflare's CDN —
+ * fast, no Lambda proxy hop.  Falls back to the /uploads/ proxy route so
+ * the app works in local dev (server.js) and on Netlify without a public
+ * bucket.
+ */
+function getPublicUrl(filename) {
+  const base = process.env.R2_PUBLIC_URL;
+  if (base) return base.replace(/\/$/, '') + '/' + filename;
+  return '/uploads/' + filename;
+}
+
 module.exports = {
   MIME,
+  getPublicUrl,
   isAllowedUploadFilename,
   getUploadsStore,
   jsonResponse,

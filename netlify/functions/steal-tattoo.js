@@ -8,6 +8,7 @@ const {
   imageToBase64Part,
   callAI,
   nextFilename,
+  getPublicUrl,
 } = require('./_lib');
 
 exports.handler = async function (event) {
@@ -62,7 +63,7 @@ exports.handler = async function (event) {
     return jsonResponse(200, {
       status: 'done',
       output_filename: outName,
-      output_url: '/uploads/' + outName,
+      output_url: getPublicUrl(outName),
       elapsed_ms: elapsed,
     });
   } catch (err) {
