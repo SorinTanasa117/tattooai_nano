@@ -47,7 +47,7 @@ const ROOT = __dirname;
   }
 })();
 const PORT = parseInt(process.env.PORT || '5173', 10);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
 const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const RAW_AI_MODEL_NAME = process.env.AI_MODEL_NAME || '';
@@ -177,15 +177,15 @@ async function nextR2Filename(prefix, ext) {
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.js':   'application/javascript; charset=utf-8',
-  '.mjs':  'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.svg':  'image/svg+xml',
-  '.ico':  'image/x-icon',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
 };
 
 function log(...args) {
@@ -411,7 +411,7 @@ function parseAIError(rawText) {
       const info = details.find((item) => item && item.reason);
       if (info) reason = info.reason;
     }
-  } catch (_) {}
+  } catch (_) { }
   return { detail, reason };
 }
 
@@ -822,7 +822,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, function() {
+server.listen(PORT, HOST, function () {
   log('InkFrame widget  -> http://' + HOST + ':' + PORT);
   log('AI model         -> ' + AI_MODEL_NAME);
   log('AI API base      -> ' + AI_API_BASE_URL);
