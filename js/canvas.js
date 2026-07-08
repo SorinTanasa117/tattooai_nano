@@ -103,7 +103,18 @@ export class PlacementCanvas {
       img.onload = () => {
         const maxW = this.host.clientWidth;
         const maxH = this.host.clientHeight;
-        const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        const isMobile = window.matchMedia('(max-width: 767px)').matches;
+
+        let scale;
+        if (isMobile) {
+          // On mobile: always fill the full screen width.
+          // Height adapts naturally to the image's aspect ratio.
+          scale = maxW / img.naturalWidth;
+        } else {
+          // On desktop: contain within the canvas pane.
+          scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+        }
+
         const dispW = Math.round(img.naturalWidth * scale);
         const dispH = Math.round(img.naturalHeight * scale);
 
@@ -122,6 +133,14 @@ export class PlacementCanvas {
         this.stage.width(dispW);
         this.stage.height(dispH);
         this._stageSize = { w: dispW, h: dispH };
+
+        // On mobile: resize the canvas-pane element to match the image height
+        // so there is no blank space above/below and scrolling is natural.
+        if (isMobile) {
+          this.host.parentElement.style.height = dispH + 'px';
+          this.host.parentElement.style.minHeight = dispH + 'px';
+        }
+
         this.bgLayer.batchDraw();
         resolve({ width: img.naturalWidth, height: img.naturalHeight, dispW: dispW, dispH: dispH });
       };

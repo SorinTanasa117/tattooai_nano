@@ -496,18 +496,27 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 @media (max-width: 767px) {
   .layout {
     grid-template-columns: 1fr;
-    /* vh fallback for browsers without svh support */
-    grid-template-rows: clamp(240px, 45vh, 420px) 1fr;
-    /* svh = small viewport height — constant even when iOS address bar
-       hides on scroll, preventing the canvas from resizing mid-session */
-    grid-template-rows: clamp(240px, 45svh, 420px) 1fr;
+    /* Both rows are auto: canvas-pane height is driven by JS (inline style)
+       once a body image loads; sidebar takes the rest of the page. */
+    grid-template-rows: auto 1fr;
     height: auto;
     min-height: calc(100vh - 52px);
   }
 
   .canvas-pane {
+    /* Initial empty state: give enough room for the overlay prompt.
+       Once a body image is loaded, canvas.js sets an explicit inline height
+       that overrides this so the image fills from edge to edge. */
     min-height: clamp(240px, 45vh, 420px);
     min-height: clamp(240px, 45svh, 420px);
+    overflow: visible;
+  }
+
+  /* Switch canvas-host to relative so the Konva stage (which has explicit px
+     dimensions set by JS) drives the container height on mobile. */
+  .canvas-host {
+    position: relative;
+    inset: unset;
   }
 
   .sidebar {
