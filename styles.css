@@ -526,6 +526,10 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
   /* show camera icon buttons; steal button shrinks to share the row */
   .btn-camera { display: flex; }
   .steal-btn-row .btn-steal { width: auto; }
+  .upload-row .btn {
+    flex: 1;
+    min-width: 0;
+  }
 
   /* slightly larger tap targets on small screens */
   .slider-step { width: 28px; height: 28px; }
