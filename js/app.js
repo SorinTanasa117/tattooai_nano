@@ -132,7 +132,13 @@ const els = {
   bodyInput: $('bodyInput'),
   tattooInput: $('tattooInput'),
   stealInput: $('stealInput'),
+  stealCameraInput: $('stealCameraInput'),
   stealBtn: $('stealBtn'),
+  stealCameraBtn: $('stealCameraBtn'),
+  bodyCameraBtn: $('bodyCameraBtn'),
+  bodyCameraInput: $('bodyCameraInput'),
+  tattooCameraBtn: $('tattooCameraBtn'),
+  tattooCameraInput: $('tattooCameraInput'),
   stealHint: $('stealHint'),
   stealProgress: $('stealProgress'),
   stealProgressText: $('stealProgressText'),
@@ -755,6 +761,22 @@ function init() {
   els.tattooInput.addEventListener('change', onTattooSelected);
   if (els.stealBtn) els.stealBtn.addEventListener('click', onStealClicked);
   if (els.stealInput) els.stealInput.addEventListener('change', onStealSourceSelected);
+
+  // Camera capture buttons (mobile only — hidden via CSS on desktop)
+  if (els.bodyCameraBtn) els.bodyCameraBtn.addEventListener('click', () => {
+    els.bodyCameraInput.value = ''; els.bodyCameraInput.click();
+  });
+  if (els.bodyCameraInput) els.bodyCameraInput.addEventListener('change', onBodySelected);
+
+  if (els.tattooCameraBtn) els.tattooCameraBtn.addEventListener('click', () => {
+    els.tattooCameraInput.value = ''; els.tattooCameraInput.click();
+  });
+  if (els.tattooCameraInput) els.tattooCameraInput.addEventListener('change', onTattooSelected);
+
+  if (els.stealCameraBtn) els.stealCameraBtn.addEventListener('click', () => {
+    els.stealCameraInput.value = ''; els.stealCameraInput.click();
+  });
+  if (els.stealCameraInput) els.stealCameraInput.addEventListener('change', onStealSourceSelected);
 
   bindSlider(els.xSlider,        els.xOut,        'x',        (v) => v);
   bindSlider(els.ySlider,        els.yOut,        'y',        (v) => v);
