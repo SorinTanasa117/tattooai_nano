@@ -36,7 +36,7 @@ async function addTattooToHistory(blob, filename) {
       timestamp: Date.now()
     };
     const request = store.add(item);
-    request.onsuccess = () => resolve();
+    request.onsuccess = () => resolve(request.result);
     request.onerror = (e) => reject(e.target.error);
   });
 }
@@ -86,6 +86,9 @@ const state = {
   renderStatus: 'idle',
   slidersBaseEnabled: false,  // whether placement sliders are unlocked by app state (tattoo placed, etc.)
   fineTuneActive: false,      // mobile-only: whether the user has switched on the finetune toggle
+  historyItems: [],
+  currentResultId: null,
+  activeResultObjectUrl: null,
 };
 
 const mobileMediaQuery = window.matchMedia('(max-width: 767px)');
@@ -179,6 +182,8 @@ const els = {
   canvasResult: $('canvasResult'),
   canvasResultImage: $('canvasResultImage'),
   canvasResultBack: $('canvasResultBack'),
+  canvasResultPrev: $('canvasResultPrev'),
+  canvasResultNext: $('canvasResultNext'),
   toast: $('toast'),
   bulkDownloadBtn: $('bulkDownloadBtn'),
   clearHistoryBtn: $('clearHistoryBtn'),
@@ -585,6 +590,7 @@ async function onRender() {
 
     state.renderStatus = 'done';
     state.lastResult = data;
+    state.currentResultId = null;
     showResult(data);
 
     // Save to local IndexedDB history
@@ -592,8 +598,10 @@ async function onRender() {
       const imgResp = await fetch(data.output_url);
       if (imgResp.ok) {
         const imgBlob = await imgResp.blob();
-        await addTattooToHistory(imgBlob, data.output_filename);
+        const historyId = await addTattooToHistory(imgBlob, data.output_filename);
         await updateHistoryUI();
+        state.currentResultId = historyId;
+        syncResultNavigation();
       }
     } catch (dbErr) {
       console.warn('Failed to save render to history:', dbErr);
@@ -623,11 +631,13 @@ function finishRenderWithError(message, detail) {
   }
 }
 
-function showResult(data) {
+function showResult(data, options) {
+  options = options || {};
   const isBlob = data.output_url.startsWith('blob:');
   const cacheBust = isBlob ? '' : ((data.output_url.indexOf('?') >= 0 ? '&' : '?') + '_t=' + Date.now());
   const finalUrl = data.output_url + cacheBust;
   els.resultImage.src = finalUrl;
+  state.currentResultId = options.historyId || state.currentResultId || null;
 
   els.downloadBtn.href = isBlob ? data.output_url : (data.output_url + (data.output_url.indexOf('?') >= 0 ? '&' : '?') + 'download=1');
   els.downloadBtn.setAttribute('download', data.output_filename);
@@ -635,6 +645,7 @@ function showResult(data) {
   els.resultMeta.textContent = data.output_filename + (data.elapsed_ms ? ' · ' + (data.elapsed_ms / 1000).toFixed(1) + 's' : '');
   els.resultPanel.hidden = false;
   showRenderInCanvas(data.output_url);
+  syncResultNavigation();
 }
 
 function showRenderInCanvas(outputUrl) {
@@ -654,6 +665,49 @@ function hideRenderInCanvas() {
   els.canvasOverlay.hidden = !!(state.bodyFile && state.tattooFile);
 }
 
+function getCurrentHistoryIndex() {
+  if (state.currentResultId == null) return -1;
+  return state.historyItems.findIndex(item => item.id === state.currentResultId);
+}
+
+function syncResultNavigation() {
+  if (!els.canvasResultPrev || !els.canvasResultNext) return;
+
+  const index = getCurrentHistoryIndex();
+  const hasOlder = index >= 0 && index < state.historyItems.length - 1;
+  const hasNewer = index > 0;
+
+  els.canvasResultPrev.hidden = !hasOlder;
+  els.canvasResultNext.hidden = !hasNewer;
+  els.canvasResultPrev.disabled = !hasOlder;
+  els.canvasResultNext.disabled = !hasNewer;
+}
+
+function showHistoryResultAt(index) {
+  const item = state.historyItems[index];
+  if (!item) return;
+
+  if (state.activeResultObjectUrl) {
+    URL.revokeObjectURL(state.activeResultObjectUrl);
+    state.activeResultObjectUrl = null;
+  }
+
+  const imgUrl = URL.createObjectURL(item.blob);
+  state.activeResultObjectUrl = imgUrl;
+  showResult({
+    output_url: imgUrl,
+    output_filename: item.filename,
+    elapsed_ms: 0
+  }, { historyId: item.id });
+  showToast('Viewing render: ' + item.filename, 'ok');
+}
+
+function showAdjacentHistoryResult(direction) {
+  const index = getCurrentHistoryIndex();
+  if (index < 0) return;
+  showHistoryResultAt(index + direction);
+}
+
 async function updateHistoryUI() {
   const history = await getTattooHistory();
   
@@ -662,6 +716,9 @@ async function updateHistoryUI() {
   items.forEach(item => item.remove());
   
   if (history.length === 0) {
+    state.historyItems = [];
+    state.currentResultId = null;
+    syncResultNavigation();
     els.historyEmpty.hidden = false;
     els.bulkDownloadBtn.disabled = true;
     els.clearHistoryBtn.disabled = true;
@@ -674,6 +731,11 @@ async function updateHistoryUI() {
   
   // Render history items sorted by timestamp descending
   history.sort((a, b) => b.timestamp - a.timestamp);
+  state.historyItems = history;
+  if (state.currentResultId != null && getCurrentHistoryIndex() === -1) {
+    state.currentResultId = null;
+  }
+  syncResultNavigation();
   
   history.forEach(item => {
     const itemEl = document.createElement('div');
@@ -724,12 +786,7 @@ async function updateHistoryUI() {
     
     // Preview on click
     itemEl.addEventListener('click', () => {
-      showResult({
-        output_url: imgUrl,
-        output_filename: item.filename,
-        elapsed_ms: 0
-      });
-      showToast('Viewing render: ' + item.filename, 'ok');
+      showHistoryResultAt(state.historyItems.findIndex(historyItem => historyItem.id === item.id));
     });
     
     els.historyGrid.appendChild(itemEl);
@@ -873,6 +930,12 @@ function init() {
     onRender();
   });
   els.canvasResultBack.addEventListener('click', hideRenderInCanvas);
+  if (els.canvasResultPrev) {
+    els.canvasResultPrev.addEventListener('click', () => showAdjacentHistoryResult(1));
+  }
+  if (els.canvasResultNext) {
+    els.canvasResultNext.addEventListener('click', () => showAdjacentHistoryResult(-1));
+  }
 
   // History action listeners
   if (els.bulkDownloadBtn) els.bulkDownloadBtn.addEventListener('click', onBulkDownload);

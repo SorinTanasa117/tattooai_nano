@@ -32,10 +32,18 @@
       </div>
       <div class="canvas-result" id="canvasResult" hidden>
         <img id="canvasResultImage" alt="Rendered tattoo" />
-        <button class="btn btn-ghost canvas-result-back" id="canvasResultBack">
-          <span class="btn-icon">←</span>
-          <span>Back to editor</span>
-        </button>
+        <div class="canvas-result-nav">
+          <button class="btn btn-ghost canvas-result-arrow" id="canvasResultPrev" aria-label="Previous image">
+            <span>&#8592;</span>
+          </button>
+          <button class="btn btn-ghost canvas-result-back" id="canvasResultBack">
+            <span class="btn-icon">&#10005;</span>
+            <span>Close</span>
+          </button>
+          <button class="btn btn-ghost canvas-result-arrow" id="canvasResultNext" aria-label="Next image">
+            <span>&#8594;</span>
+          </button>
+        </div>
       </div>
     </section>
 
