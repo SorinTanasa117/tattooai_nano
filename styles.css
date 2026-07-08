@@ -307,8 +307,9 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 .result-image-wrap {
   border-radius: 8px; overflow: hidden; background: var(--bg-2);
   margin-bottom: 10px; border: 1px solid var(--line);
+  touch-action: pan-y;
 }
-.result-image-wrap img { display: block; width: 100%; height: auto; }
+.result-image-wrap img { display: block; width: 100%; height: auto; user-select: none; }
 .result-meta { margin-top: 8px; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
 .toast {
@@ -415,6 +416,8 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   background: var(--bg-2);
+  touch-action: pan-y;
+  user-select: none;
 }
 .canvas-result-nav {
   display: flex;

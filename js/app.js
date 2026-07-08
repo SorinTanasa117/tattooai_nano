@@ -708,6 +708,39 @@ function showAdjacentHistoryResult(direction) {
   showHistoryResultAt(index + direction);
 }
 
+function bindResultSwipe(target) {
+  if (!target) return;
+
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+
+  target.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    if (getCurrentHistoryIndex() < 0) return;
+    tracking = true;
+    startX = e.clientX;
+    startY = e.clientY;
+  });
+
+  target.addEventListener('pointerup', (e) => {
+    if (!tracking) return;
+    tracking = false;
+
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (absX < 44 || absX < absY * 1.25) return;
+    showAdjacentHistoryResult(dx < 0 ? 1 : -1);
+  });
+
+  target.addEventListener('pointercancel', () => {
+    tracking = false;
+  });
+}
+
 async function updateHistoryUI() {
   const history = await getTattooHistory();
   
@@ -936,6 +969,8 @@ function init() {
   if (els.canvasResultNext) {
     els.canvasResultNext.addEventListener('click', () => showAdjacentHistoryResult(-1));
   }
+  bindResultSwipe(els.resultImage);
+  bindResultSwipe(els.canvasResultImage);
 
   // History action listeners
   if (els.bulkDownloadBtn) els.bulkDownloadBtn.addEventListener('click', onBulkDownload);
