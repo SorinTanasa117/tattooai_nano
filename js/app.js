@@ -84,7 +84,12 @@ const state = {
   tattooUploadedOpacity: 1,   // opacity that was baked into the last tattooFile upload
   opacity: 1,                 // current slider opacity (0..1)
   renderStatus: 'idle',
+  slidersBaseEnabled: false,  // whether placement sliders are unlocked by app state (tattoo placed, etc.)
+  fineTuneActive: false,      // mobile-only: whether the user has switched on the finetune toggle
 };
+
+const mobileMediaQuery = window.matchMedia('(max-width: 767px)');
+function isMobileView() { return mobileMediaQuery.matches; }
 
 /**
  * Pre-multiply a File's alpha channel by `opacity` (0..1) and return a new
@@ -137,15 +142,12 @@ const els = {
   stealCameraBtn: $('stealCameraBtn'),
   bodyCameraBtn: $('bodyCameraBtn'),
   bodyCameraInput: $('bodyCameraInput'),
-  tattooCameraBtn: $('tattooCameraBtn'),
-  tattooCameraInput: $('tattooCameraInput'),
   stealHint: $('stealHint'),
   stealProgress: $('stealProgress'),
   stealProgressText: $('stealProgressText'),
   bodyHint: $('bodyHint'),
   tattooHint: $('tattooHint'),
   fitBtn: $('fitBtn'),
-  centerBtn: $('centerBtn'),
   xSlider: $('xSlider'),
   ySlider: $('ySlider'),
   widthSlider: $('widthSlider'),
@@ -155,6 +157,8 @@ const els = {
   opacityOut: $('opacityOut'),
   rotationSlider: $('rotationSlider'),
   rotationOut: $('rotationOut'),
+  finetuneToggle: $('finetuneToggle'),
+  finetuneToggleStatus: $('finetuneToggleStatus'),
   xOut: $('xOut'),
   yOut: $('yOut'),
   widthOut: $('widthOut'),
@@ -234,15 +238,37 @@ function showError(msg, detail) {
   }
 }
 
-function setSlidersEnabled(enabled) {
+function applySliderInteractivity() {
+  // On mobile, the finetune toggle gates the placement sliders (off by
+  // default) to avoid accidental drags while scrolling. Desktop always
+  // follows the base enabled state — no toggle involved.
+  const active = state.slidersBaseEnabled && (!isMobileView() || state.fineTuneActive);
   [els.xSlider, els.ySlider, els.widthSlider, els.heightSlider, els.opacitySlider].forEach((s) => {
     if (!s) return;
-    s.disabled = !enabled;
-    document.querySelectorAll('[data-target="' + s.id + '"]').forEach((b) => { b.disabled = !enabled; });
+    s.disabled = !active;
+    document.querySelectorAll('[data-target="' + s.id + '"]').forEach((b) => { b.disabled = !active; });
   });
-  if (els.rotationSlider) els.rotationSlider.disabled = !enabled;
+  if (els.rotationSlider) {
+    els.rotationSlider.disabled = !active;
+    document.querySelectorAll('[data-target="' + els.rotationSlider.id + '"]').forEach((b) => { b.disabled = !active; });
+  }
+}
+
+function setFinetuneToggleUI(checked) {
+  state.fineTuneActive = checked;
+  if (els.finetuneToggle) els.finetuneToggle.checked = checked;
+  if (els.finetuneToggleStatus) els.finetuneToggleStatus.textContent = checked ? 'ON' : 'OFF';
+}
+
+function setSlidersEnabled(enabled) {
+  state.slidersBaseEnabled = enabled;
+  if (!enabled) {
+    // Reset the mobile finetune toggle so it doesn't appear "on" while the
+    // sliders are locked out by app state (e.g. no tattoo placed yet).
+    setFinetuneToggleUI(false);
+  }
+  applySliderInteractivity();
   els.fitBtn.disabled = !enabled;
-  els.centerBtn.disabled = !enabled;
 }
 
 function setRenderEnabled(enabled) { els.renderBtn.disabled = !enabled; }
@@ -768,15 +794,20 @@ function init() {
   });
   if (els.bodyCameraInput) els.bodyCameraInput.addEventListener('change', onBodySelected);
 
-  if (els.tattooCameraBtn) els.tattooCameraBtn.addEventListener('click', () => {
-    els.tattooCameraInput.value = ''; els.tattooCameraInput.click();
-  });
-  if (els.tattooCameraInput) els.tattooCameraInput.addEventListener('change', onTattooSelected);
-
   if (els.stealCameraBtn) els.stealCameraBtn.addEventListener('click', () => {
     els.stealCameraInput.value = ''; els.stealCameraInput.click();
   });
   if (els.stealCameraInput) els.stealCameraInput.addEventListener('change', onStealSourceSelected);
+
+  // Mobile-only finetune toggle: off by default, gates the placement sliders.
+  if (els.finetuneToggle) {
+    setFinetuneToggleUI(false);
+    els.finetuneToggle.addEventListener('change', () => {
+      setFinetuneToggleUI(els.finetuneToggle.checked);
+      applySliderInteractivity();
+    });
+  }
+  mobileMediaQuery.addEventListener('change', applySliderInteractivity);
 
   bindSlider(els.xSlider,        els.xOut,        'x',        (v) => v);
   bindSlider(els.ySlider,        els.yOut,        'y',        (v) => v);
@@ -834,7 +865,6 @@ function init() {
   els.fitBtn.addEventListener('click', () => {
     if (els.canvas && els.canvas.tattooImage) els.canvas.reset();
   });
-  els.centerBtn.addEventListener('click', () => els.canvas.center());
 
   els.renderBtn.addEventListener('click', onRender);
   els.rerenderBtn.addEventListener('click', () => {

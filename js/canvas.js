@@ -513,15 +513,6 @@ export class PlacementCanvas {
     this._changeCb && this._changeCb(this.getState());
   }
 
-  center() {
-    if (!this.tattooImage) return;
-    this.tattooImage.x(this._stageSize.w / 2);
-    this.tattooImage.y(this._stageSize.h / 2);
-    this.updateHandles();
-    this.fgLayer.batchDraw();
-    this._changeCb && this._changeCb(this.getState());
-  }
-
   reset() {
     if (!this.tattooImage || !this.bodyNaturalDims) return;
     this.refit(this.bodyNaturalDims);
