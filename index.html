@@ -43,49 +43,55 @@
       <div class="panel">
         <div class="panel-title">1 · Uploads</div>
         <div class="upload-row">
-          <div class="upload-slot">
-            <label class="btn btn-ghost">
-              <input type="file" id="bodyInput" accept="image/*" hidden />
-              <span class="btn-label">Body photo</span>
-              <span class="btn-hint" id="bodyHint">choose file</span>
-            </label>
-            <input type="file" id="bodyCameraInput" accept="image/*" capture="environment" hidden />
-            <button class="btn-camera" id="bodyCameraBtn" title="Take photo" aria-label="Take body photo with camera"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
-          </div>
-          <div class="upload-slot">
-            <label class="btn btn-ghost">
-              <input type="file" id="tattooInput" accept="image/*" hidden />
-              <span class="btn-label">Tattoo design</span>
-              <span class="btn-hint" id="tattooHint">choose file</span>
-            </label>
-            <input type="file" id="tattooCameraInput" accept="image/*" capture="environment" hidden />
-            <button class="btn-camera" id="tattooCameraBtn" title="Take photo" aria-label="Photograph tattoo with camera"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
-          </div>
+          <label class="btn btn-ghost btn-icon-label">
+            <input type="file" id="bodyInput" accept="image/*" hidden />
+            <span class="btn-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 21h14"/></svg></span>
+            <span class="btn-label">Body photo</span>
+            <span class="btn-hint sr-only" id="bodyHint">choose file</span>
+          </label>
+          <input type="file" id="bodyCameraInput" accept="image/*" capture="environment" hidden />
+          <button class="btn btn-ghost btn-icon-label" type="button" id="bodyCameraBtn" title="Take photo" aria-label="Take body photo with camera">
+            <span class="btn-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></span>
+            <span class="btn-label">Body photo</span>
+          </button>
+        </div>
+        <div class="upload-row upload-row-triple">
+          <label class="btn btn-ghost btn-icon-label">
+            <input type="file" id="tattooInput" accept="image/*" hidden />
+            <span class="btn-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 21h14"/></svg></span>
+            <span class="btn-label">Tattoo design</span>
+            <span class="btn-hint sr-only" id="tattooHint">choose file</span>
+          </label>
+          <input type="file" id="stealInput" accept="image/*" hidden />
+          <button class="btn btn-steal btn-icon-label" type="button" id="stealBtn">
+            <span class="btn-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 21h14"/></svg></span>
+            <span class="btn-label">Steal tattoo</span>
+            <span class="btn-hint sr-only" id="stealHint">choose source photo</span>
+          </button>
+          <input type="file" id="stealCameraInput" accept="image/*" capture="environment" hidden />
+          <button class="btn btn-steal btn-icon-label" type="button" id="stealCameraBtn" title="Photograph tattoo" aria-label="Photograph tattoo to steal">
+            <span class="btn-icon" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></span>
+            <span class="btn-label">Steal tattoo</span>
+          </button>
         </div>
         <div class="quick-row">
           <button class="btn btn-mini" id="fitBtn" disabled>Reset tattoo</button>
-          <button class="btn btn-mini" id="centerBtn" disabled>Center</button>
         </div>
-        <div class="steal-area">
-          <input type="file" id="stealInput" accept="image/*" hidden />
-          <input type="file" id="stealCameraInput" accept="image/*" capture="environment" hidden />
-          <div class="steal-btn-row">
-            <button class="btn btn-steal" id="stealBtn">
-              <span class="btn-icon">✦</span>
-              <span class="btn-label">Steal Tattoo</span>
-              <span class="btn-hint" id="stealHint">choose source photo</span>
-            </button>
-            <button class="btn-camera btn-camera-steal" id="stealCameraBtn" title="Photograph tattoo" aria-label="Photograph tattoo to steal"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
-          </div>
-          <div class="steal-progress" id="stealProgress" hidden>
-            <div class="spinner steal-spinner"></div>
-            <div class="progress-text" id="stealProgressText">Uploading…</div>
-          </div>
+        <div class="steal-progress" id="stealProgress" hidden>
+          <div class="spinner steal-spinner"></div>
+          <div class="progress-text" id="stealProgressText">Uploading…</div>
         </div>
       </div>
 
       <div class="panel">
-        <div class="panel-title">2 · Placement</div>
+        <div class="panel-title panel-title-row">
+          <span>2 · Placement finetuning (optional)</span>
+          <label class="finetune-toggle" id="finetuneToggleWrap">
+            <input type="checkbox" id="finetuneToggle" aria-label="Enable placement finetuning controls" />
+            <span class="finetune-toggle-track"><span class="finetune-toggle-thumb"></span></span>
+            <span class="finetune-toggle-status" id="finetuneToggleStatus">OFF</span>
+          </label>
+        </div>
         <div class="slider-row">
           <label>X</label>
           <button class="slider-step" type="button" data-target="xSlider" data-dir="-1" aria-label="Decrease X">−</button>

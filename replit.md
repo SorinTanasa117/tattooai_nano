@@ -17,7 +17,7 @@ No build step required. The server has zero npm runtime dependencies.
 - **Runtime**: Node.js ≥ 20 (plain `http` module, no framework)
 - **Frontend**: Vanilla JS + HTML/CSS (`index.html`, `js/`, `styles.css`)
 - **AI**: Google Gemini image generation API (via `AI_PROVIDER_API_KEY`)
-- **Storage**: Local `uploads/` directory (dev); optional Cloudflare R2 (via Netlify functions)
+- **Storage**: Cloudflare R2 (used for both the dev server and the Netlify functions deployment)
 
 ## Environment variables & secrets
 
@@ -47,7 +47,6 @@ js/
 styles.css         – UI styles
 netlify/functions/ – Serverless equivalents (for Netlify deployment)
 scripts/           – Build/test utilities
-uploads/           – Local image uploads (gitignored)
 ```
 
 ## User preferences

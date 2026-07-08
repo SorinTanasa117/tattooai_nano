@@ -16,20 +16,15 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+} = require('@aws-sdk/client-s3');
 
 const ROOT = __dirname;
-
-// Netlify uses a read-only filesystem except for the system /tmp directory
-const UPLOAD_DIR = process.env.NETLIFY ? '/tmp' : path.join(ROOT, 'uploads');
-
-// Only try to run mkdir if we aren't using a global temporary system directory
-if (!process.env.NETLIFY && !fs.existsSync(UPLOAD_DIR)) {
-  try {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  } catch (err) {
-    console.error("Warning: Failed to create upload directory locally:", err.message);
-  }
-}
 
 // Load .env from project root (no npm deps required)
 (function loadDotEnv() {
@@ -63,6 +58,122 @@ const AI_MODEL_NAME = (!RAW_AI_MODEL_NAME || RAW_AI_MODEL_NAME === LEGACY_PREVIE
   ? DEFAULT_AI_MODEL_NAME
   : RAW_AI_MODEL_NAME;
 const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '30000', 10);
+
+// --- Cloudflare R2 storage -------------------------------------------------
+// All session working files (uploads, stolen tattoos, rendered results) live
+// in R2, not on local disk, so the same storage backs both this dev server
+// and the Netlify functions deployment (see netlify/functions/_lib.js).
+function requireEnv(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(name + ' is not configured');
+  return value;
+}
+
+function getR2Config() {
+  return {
+    accountId: requireEnv('R2_ACCOUNT_ID'),
+    accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
+    secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
+    bucketName: requireEnv('R2_BUCKET_NAME'),
+  };
+}
+
+let r2Client;
+function getR2Client(config) {
+  if (!r2Client) {
+    r2Client = new S3Client({
+      region: 'auto',
+      endpoint: 'https://' + config.accountId + '.r2.cloudflarestorage.com',
+      credentials: {
+        accessKeyId: config.accessKeyId,
+        secretAccessKey: config.secretAccessKey,
+      },
+      forcePathStyle: true,
+    });
+  }
+  return r2Client;
+}
+
+async function streamToBuffer(body) {
+  if (!body) return null;
+  if (typeof body.transformToByteArray === 'function') {
+    return Buffer.from(await body.transformToByteArray());
+  }
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+let uploadsStore;
+function getUploadsStore() {
+  if (uploadsStore) return uploadsStore;
+  const config = getR2Config();
+  const client = getR2Client(config);
+  const Bucket = config.bucketName;
+
+  uploadsStore = {
+    async get(key) {
+      try {
+        const result = await client.send(new GetObjectCommand({ Bucket, Key: key }));
+        return await streamToBuffer(result.Body);
+      } catch (err) {
+        if (err && (err.name === 'NoSuchKey' || (err.$metadata && err.$metadata.httpStatusCode === 404))) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    async set(key, data, contentType) {
+      await client.send(new PutObjectCommand({
+        Bucket, Key: key, Body: data,
+        ContentType: contentType || 'application/octet-stream',
+        CacheControl: 'no-store',
+      }));
+    },
+    async list(prefix) {
+      const keys = [];
+      let ContinuationToken;
+      do {
+        const result = await client.send(new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken }));
+        for (const item of result.Contents || []) {
+          if (item.Key) keys.push(item.Key);
+        }
+        ContinuationToken = result.NextContinuationToken;
+      } while (ContinuationToken);
+      return keys;
+    },
+    async delete(key) {
+      await client.send(new DeleteObjectCommand({ Bucket, Key: key }));
+    },
+  };
+  return uploadsStore;
+}
+
+// Public URL for a stored file. If R2_PUBLIC_URL is set, images are served
+// directly from Cloudflare's CDN; otherwise fall back to the /uploads/
+// proxy route below, which streams the object out of R2 on demand.
+function getPublicUrl(filename) {
+  const base = process.env.R2_PUBLIC_URL;
+  if (base) return base.replace(/\/$/, '') + '/' + filename;
+  return '/uploads/' + filename;
+}
+
+// Finds the next unused "<prefix>_N.<ext>" name by listing existing objects.
+async function nextR2Filename(prefix, ext) {
+  const keys = await getUploadsStore().list(prefix + '_');
+  let max = 0;
+  const re = new RegExp('^' + prefix + '_(\\d+)\\.');
+  for (const key of keys) {
+    const m = re.exec(key);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  return prefix + '_' + (max + 1) + ext;
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -98,7 +209,9 @@ function sendError(res, status, message, extra) {
   sendJson(res, status, body);
 }
 
-function parseMultipart(req, contentType, saveDir, prefix) {
+// Reads the multipart body and returns the raw "file" field's bytes --
+// storage (R2) happens in the caller, not here.
+function parseMultipart(req, contentType) {
   return new Promise((resolve, reject) => {
     const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType || '');
     if (!m) return reject(new Error('No boundary in Content-Type'));
@@ -125,12 +238,7 @@ function parseMultipart(req, contentType, saveDir, prefix) {
           if (!nameMatch || nameMatch[1] !== 'file') continue;
           const filenameMatch = /filename="([^"]*)"/.exec(disp);
           const origName = filenameMatch ? filenameMatch[1] : 'upload';
-          const ext = (path.extname(origName) || '.png').toLowerCase();
-          const data = part.body;
-          const finalName = nextFilename(saveDir, prefix, ext);
-          const outPath = path.join(saveDir, finalName);
-          fs.writeFileSync(outPath, data);
-          resolve({ filename: finalName, originalName: origName, size: data.length });
+          resolve({ originalName: origName, data: part.body });
           return;
         }
         reject(new Error('No file field in multipart body'));
@@ -173,21 +281,6 @@ function splitMultipart(buf, boundary) {
   return parts;
 }
 
-function nextFilename(dir, prefix, ext) {
-  for (let i = 1; i < 10000; i++) {
-    const name = `${prefix}_${i}${ext}`;
-    const full = path.join(dir, name);
-    try {
-      const fd = fs.openSync(full, 'wx');
-      fs.closeSync(fd);
-      return name;
-    } catch (e) {
-      if (e.code === 'EEXIST') continue;
-      throw e;
-    }
-  }
-  throw new Error('Could not allocate a unique filename for prefix: ' + prefix);
-}
 
 function readJsonBody(req, limit) {
   if (!limit) limit = 5 * 1024 * 1024;
@@ -404,12 +497,11 @@ async function callAI(parts) {
   throw new Error('AI API returned no image. ' + (textResponse ? 'Response: ' + textResponse.slice(0, 300) : 'Empty response.'));
 }
 
-function imageToBase64Part(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
+function imageToBase64Part(buffer, filename) {
+  const ext = path.extname(filename).toLowerCase();
   const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
   const mimeType = mimeMap[ext] || 'image/png';
-  const data = fs.readFileSync(filePath).toString('base64');
-  return { inlineData: { mimeType, data } };
+  return { inlineData: { mimeType, data: buffer.toString('base64') } };
 }
 
 // Allowlist of filename patterns that may be served or read.
@@ -436,15 +528,19 @@ async function handleUpload(req, res, kind) {
     return sendError(res, 400, 'Expected multipart/form-data');
   }
   try {
-    const result = await parseMultipart(req, ct, UPLOAD_DIR, prefix);
-    log('upload ' + kind + ':', result.filename, '(' + result.size + ' bytes)');
+    const parsed = await parseMultipart(req, ct);
+    const ext = (path.extname(parsed.originalName) || '.png').toLowerCase();
+    const finalName = await nextR2Filename(prefix, ext);
+    const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' };
+    await getUploadsStore().set(finalName, parsed.data, mimeMap[ext] || 'application/octet-stream');
+    log('upload ' + kind + ':', finalName, '(' + parsed.data.length + ' bytes)');
     sendJson(res, 200, {
       status: 'ok',
       kind: kind,
-      filename: result.filename,
-      originalName: result.originalName,
-      size: result.size,
-      url: '/uploads/' + result.filename,
+      filename: finalName,
+      originalName: parsed.originalName,
+      size: parsed.data.length,
+      url: getPublicUrl(finalName),
     });
   } catch (err) {
     log('upload ' + kind + ' error:', err.message);
@@ -452,14 +548,14 @@ async function handleUpload(req, res, kind) {
   }
 }
 
-function handleStatus(res) {
-  const files = fs.readdirSync(UPLOAD_DIR);
-  const bodies = files.filter((f) => /^body_\d+\./i.test(f)).sort();
-  const tattoos = files.filter((f) => /^tattoo_\d+\./i.test(f)).sort();
+async function handleStatus(res) {
+  const keys = await getUploadsStore().list();
+  const bodies = keys.filter((f) => /^body_\d+\./i.test(f)).sort();
+  const tattoos = keys.filter((f) => /^tattoo_\d+\./i.test(f)).sort();
   sendJson(res, 200, {
     status: 'ok',
-    bodies: bodies.map((f) => ({ filename: f, url: '/uploads/' + f })),
-    tattoos: tattoos.map((f) => ({ filename: f, url: '/uploads/' + f })),
+    bodies: bodies.map((f) => ({ filename: f, url: getPublicUrl(f) })),
+    tattoos: tattoos.map((f) => ({ filename: f, url: getPublicUrl(f) })),
     ai_model: AI_MODEL_NAME,
     ai_ready: !!AI_API_KEY,
   });
@@ -478,8 +574,8 @@ async function handleStealTattoo(req, res) {
   if (!isAllowedUploadFilename(source_filename) || !/^steal_src_/i.test(source_filename))
     return sendError(res, 400, 'Invalid source_filename: must be a steal-source upload (steal_src_N.ext)');
 
-  const sourcePath = path.join(UPLOAD_DIR, source_filename);
-  if (!fs.existsSync(sourcePath))
+  const sourceData = await getUploadsStore().get(source_filename);
+  if (!sourceData)
     return sendError(res, 400, 'Source file not found: ' + source_filename);
 
   if (!AI_API_KEY)
@@ -497,21 +593,21 @@ async function handleStealTattoo(req, res) {
           'Preserve the exact lines, shading, and colors of the tattoo.',
         ].join(' '),
       },
-      imageToBase64Part(sourcePath),
+      imageToBase64Part(sourceData, source_filename),
     ];
 
     const result = await callAI(parts);
 
     const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
-    const outName = nextFilename(UPLOAD_DIR, 'stolen', ext);
-    fs.writeFileSync(path.join(UPLOAD_DIR, outName), result.data);
+    const outName = await nextR2Filename('stolen', ext);
+    await getUploadsStore().set(outName, result.data, result.mimeType);
 
     const elapsed = Date.now() - t0;
     log('steal-tattoo: done in', elapsed, 'ms ->', outName);
     sendJson(res, 200, {
       status: 'done',
       output_filename: outName,
-      output_url: '/uploads/' + outName,
+      output_url: getPublicUrl(outName),
       elapsed_ms: elapsed,
     });
   } catch (err) {
@@ -539,31 +635,32 @@ async function handleRunWorkflow(req, res) {
   if (!isAllowedUploadFilename(payload.tattoo_filename) || !/^tattoo_/i.test(payload.tattoo_filename))
     return sendError(res, 400, 'Invalid tattoo_filename: must be a tattoo upload (tattoo_N.ext)');
 
+  const store = getUploadsStore();
+
   // Composite reference is optional
-  let compositePath = null;
+  let compositeData = null;
   if (payload.composite_filename) {
     if (!isAllowedUploadFilename(payload.composite_filename) || !/^composite_/i.test(payload.composite_filename))
       return sendError(res, 400, 'Invalid composite_filename: must be a composite upload (composite_N.ext)');
-    const cp = path.join(UPLOAD_DIR, payload.composite_filename);
-    if (fs.existsSync(cp)) compositePath = cp;
+    compositeData = await store.get(payload.composite_filename);
   }
 
-  const bodyPath = path.join(UPLOAD_DIR, payload.body_filename);
-  const tattooPath = path.join(UPLOAD_DIR, payload.tattoo_filename);
-  if (!fs.existsSync(bodyPath)) return sendError(res, 400, 'Body file not found: ' + payload.body_filename);
-  if (!fs.existsSync(tattooPath)) return sendError(res, 400, 'Tattoo file not found: ' + payload.tattoo_filename);
+  const bodyData = await store.get(payload.body_filename);
+  const tattooData = await store.get(payload.tattoo_filename);
+  if (!bodyData) return sendError(res, 400, 'Body file not found: ' + payload.body_filename);
+  if (!tattooData) return sendError(res, 400, 'Tattoo file not found: ' + payload.tattoo_filename);
 
   if (!AI_API_KEY)
     return sendError(res, 500, 'AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not configured');
 
   try {
-    log('run-workflow: calling AI to render tattoo' + (compositePath ? ' (with composite reference)' : '') + '...');
+    log('run-workflow: calling AI to render tattoo' + (compositeData ? ' (with composite reference)' : '') + '...');
 
     const rotation = payload.rotation || 0;
 
     let prompt, parts;
 
-    if (compositePath) {
+    if (compositeData) {
       // Composite reference mode: the AI sees exactly where the tattoo sits.
       // The composite was exported at full opacity so placement is unambiguous.
       prompt = [
@@ -589,9 +686,9 @@ async function handleRunWorkflow(req, res) {
 
       parts = [
         { text: prompt },
-        imageToBase64Part(bodyPath),
-        imageToBase64Part(tattooPath),
-        imageToBase64Part(compositePath),
+        imageToBase64Part(bodyData, payload.body_filename),
+        imageToBase64Part(tattooData, payload.tattoo_filename),
+        imageToBase64Part(compositeData, payload.composite_filename),
       ];
     } else {
       // Fallback: no composite reference, use coordinate hints only
@@ -609,23 +706,23 @@ async function handleRunWorkflow(req, res) {
 
       parts = [
         { text: prompt },
-        imageToBase64Part(bodyPath),
-        imageToBase64Part(tattooPath),
+        imageToBase64Part(bodyData, payload.body_filename),
+        imageToBase64Part(tattooData, payload.tattoo_filename),
       ];
     }
 
     const result = await callAI(parts);
 
     const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
-    const outName = nextFilename(UPLOAD_DIR, 'result', ext);
-    fs.writeFileSync(path.join(UPLOAD_DIR, outName), result.data);
+    const outName = await nextR2Filename('result', ext);
+    await store.set(outName, result.data, result.mimeType);
 
     const elapsed = Date.now() - t0;
     log('run-workflow: done in', elapsed, 'ms ->', outName);
     sendJson(res, 200, {
       status: 'done',
       output_filename: outName,
-      output_url: '/uploads/' + outName,
+      output_url: getPublicUrl(outName),
       elapsed_ms: elapsed,
       ai_model: AI_MODEL_NAME,
     });
@@ -635,20 +732,18 @@ async function handleRunWorkflow(req, res) {
   }
 }
 
-function handleClearUploads(req, res) {
+async function handleClearUploads(req, res) {
   try {
-    const files = fs.readdirSync(UPLOAD_DIR);
+    const store = getUploadsStore();
+    const keys = await store.list();
     let deletedCount = 0;
-    for (const file of files) {
-      if (isAllowedUploadFilename(file)) {
-        const filePath = path.join(UPLOAD_DIR, file);
-        if (fs.statSync(filePath).isFile()) {
-          fs.unlinkSync(filePath);
-          deletedCount++;
-        }
+    for (const key of keys) {
+      if (isAllowedUploadFilename(key)) {
+        await store.delete(key);
+        deletedCount++;
       }
     }
-    log('Cleared uploads directory. Deleted ' + deletedCount + ' files.');
+    log('Cleared uploads. Deleted ' + deletedCount + ' files.');
     sendJson(res, 200, { status: 'ok', message: 'Uploads cleared' });
   } catch (err) {
     log('Error clearing uploads:', err.message);
@@ -656,24 +751,30 @@ function handleClearUploads(req, res) {
   }
 }
 
-function handleUploads(req, res, urlPath) {
-  const fname = urlPath.replace(/^\/uploads\//, '');
+async function handleUploads(req, res, urlPath) {
+  const fname = decodeURIComponent(urlPath.replace(/^\/uploads\//, ''));
   // Strict allowlist: only serve files we generated/uploaded, never arbitrary project files
   if (!isAllowedUploadFilename(fname)) {
     res.writeHead(403); return res.end('Forbidden');
   }
-  const full = path.join(UPLOAD_DIR, fname);
-  if (!full.startsWith(UPLOAD_DIR) || !fs.existsSync(full)) {
+  let data;
+  try {
+    data = await getUploadsStore().get(fname);
+  } catch (err) {
+    log('Error fetching upload from R2:', err.message);
+    res.writeHead(500); return res.end('Storage error');
+  }
+  if (!data) {
     res.writeHead(404); return res.end('Not found');
   }
-  const ext = path.extname(full).toLowerCase();
+  const ext = path.extname(fname).toLowerCase();
   const wantsDownload = (new URL(req.url, 'http://x').searchParams.get('download')) === '1';
-  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream' };
+  const headers = { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' };
   if (wantsDownload) {
     headers['Content-Disposition'] = 'attachment; filename="' + fname.replace(/[\r\n"\\]/g, '_') + '"';
   }
   res.writeHead(200, headers);
-  fs.createReadStream(full).pipe(res);
+  res.end(data);
 }
 
 const server = http.createServer(async (req, res) => {
