@@ -13,8 +13,24 @@
   # serverless source or build output as a harmless default/fallback value.
   SECRETS_SCAN_OMIT_KEYS = "AI_MODEL_NAME,RENDER_TIMEOUT_MS"
 
-# Route every /api/* call to a Netlify Function of the same name.
-# e.g. /api/status -> netlify/functions/status.js
+# 1. SECURITY: Block public web access to configuration and backend files
+[[redirects]]
+  from = "/netlify.toml"
+  to = "/"
+  status = 404
+
+[[redirects]]
+  from = "/netlify/*"
+  to = "/"
+  status = 404
+
+# 2. UPLOADS PROXY FIXED: Map static upload assets to your function using :splat
+[[redirects]]
+  from = "/uploads/*"
+  to = "/.netlify/functions/get-upload?filename=:splat"
+  status = 200
+
+# 3. API ROUTING: Route every /api/* call to a Netlify Function of the same name.
 [[redirects]]
   from = "/api/status"
   to = "/.netlify/functions/status"
@@ -53,11 +69,4 @@
 [[redirects]]
   from = "/api/clear-uploads"
   to = "/.netlify/functions/clear-uploads"
-  status = 200
-
-# Serve stored uploads/results out of Cloudflare R2 instead of a real
-# /uploads folder on disk (Netlify Functions have no persistent disk).
-[[redirects]]
-  from = "/uploads/:filename"
-  to = "/.netlify/functions/get-upload?filename=:filename"
   status = 200
