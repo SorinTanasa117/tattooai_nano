@@ -56,7 +56,8 @@ exports.handler = async function (event) {
           'Extract and isolate the tattoo design from this photo.',
           'Remove all skin, body parts, background, and non-tattoo elements.',
           'Return only the tattoo artwork — clean lines and colors on a white background — suitable for reuse as a tattoo template.',
-          'Preserve the exact lines, shading, and colors of the tattoo.',
+          'Preserve the exact lines, shading, and colors of the tattoo',
+          'Do not smoothen lines or darken faded colors. They represent valuable real-life ink degradation. Instead, preserve the original fade designs.'
         ].join(' '),
       },
       imageToBase64Part(sourceBuffer, source_filename),
