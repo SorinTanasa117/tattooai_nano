@@ -1,6 +1,8 @@
 'use strict';
 
 const { getUploadsStore, jsonResponse, errorResponse, getAIModelName, requireTenant, getPublicUrl } = require('./_lib');
+// Add this temporarily to status.js to test:
+console.log("Environment Keys Found:", Object.keys(process.env).filter(key => !key.startsWith("AWS_")));
 
 exports.handler = async function (event) {
   if (event.httpMethod !== 'GET') return errorResponse(405, 'Method not allowed');
