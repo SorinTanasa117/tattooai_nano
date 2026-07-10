@@ -43,8 +43,49 @@ const UPLOAD_PATTERNS = [
 
 function isAllowedUploadFilename(name) {
   if (typeof name !== 'string') return false;
-  if (name.startsWith('.') || name.includes('/') || name.includes('\\') || name.includes('..')) return false;
-  return UPLOAD_PATTERNS.some((re) => re.test(name));
+  if (name.startsWith('.') || name.includes('\\') || name.includes('..')) return false;
+  // Multi-tenant keys look like "t_<hash>/body_3.png" -- exactly one
+  // tenant-folder segment is allowed, and the final segment must match
+  // one of our generated patterns.
+  const segments = name.split('/');
+  if (segments.length > 2) return false;
+  if (segments.length === 2 && !/^t_[a-f0-9]{16}$/.test(segments[0])) return false;
+  const base = segments[segments.length - 1];
+  return UPLOAD_PATTERNS.some((re) => re.test(base));
+}
+
+// ---------------------------------------------------------------------
+// Multi-tenant licensing. Each WordPress customer site sends its license
+// key in the X-InkFrame-License header (attached server-side by the WP
+// plugin's proxy -- browsers never see it). We map that key to a stable
+// tenant folder so different customers' files never collide or leak
+// into each other's storage or history listing.
+//
+// MVP license store: a comma-separated env var. Swap this for a real
+// database/table (with per-tenant usage tracking for billing) once you
+// have more than a handful of customers.
+// ---------------------------------------------------------------------
+const crypto = require('crypto');
+
+function getValidLicenseKeys() {
+  return (process.env.INKFRAME_LICENSE_KEYS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function tenantIdForLicense(licenseKey) {
+  return 't_' + crypto.createHash('sha256').update(licenseKey).digest('hex').slice(0, 16);
+}
+
+// Call at the top of every handler. Returns { tenantId } on success or
+// { errorResponse } if the request should be rejected.
+function requireTenant(event) {
+  const key = getHeader(event, 'x-inkframe-license');
+  if (!key || !getValidLicenseKeys().includes(key)) {
+    return { errorResponse: errorResponse(401, 'Invalid or missing license key') };
+  }
+  return { tenantId: tenantIdForLicense(key) };
 }
 
 let r2Client;
@@ -184,10 +225,11 @@ function getHeader(event, name) {
 // Finds the next unused N for "<prefix>_N.<ext>" by listing existing objects
 // under that prefix. Equivalent to server.js's nextFilename(), just backed
 // by store.list() instead of fs.readdirSync().
-async function nextFilename(store, prefix, ext) {
-  const { blobs } = await store.list({ prefix: prefix + '_' });
+async function nextFilename(store, prefix, ext, tenantId) {
+  const listPrefix = tenantId ? tenantId + '/' + prefix + '_' : prefix + '_';
+  const { blobs } = await store.list({ prefix: listPrefix });
   let max = 0;
-  const re = new RegExp('^' + prefix + '_(\\d+)\\.');
+  const re = new RegExp('(?:^|/)' + prefix + '_(\\d+)\\.');
   for (const b of blobs) {
     const m = re.exec(b.key);
     if (m) {
@@ -195,7 +237,8 @@ async function nextFilename(store, prefix, ext) {
       if (n > max) max = n;
     }
   }
-  return prefix + '_' + (max + 1) + ext;
+  const name = prefix + '_' + (max + 1) + ext;
+  return tenantId ? tenantId + '/' + name : name;
 }
 
 // Identical multipart body splitter to server.js's splitMultipart, just
@@ -471,4 +514,6 @@ module.exports = {
   imageToBase64Part,
   getAIModelName,
   callAI,
+  requireTenant,
+  tenantIdForLicense,
 };

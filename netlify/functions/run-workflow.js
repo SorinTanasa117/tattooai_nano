@@ -10,11 +10,15 @@ const {
   nextFilename,
   getAIModelName,
   getPublicUrl,
+  requireTenant,
 } = require('./_lib');
 
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') return errorResponse(405, 'Method not allowed');
   const t0 = Date.now();
+
+  const tenant = requireTenant(event);
+  if (tenant.errorResponse) return tenant.errorResponse;
 
   let payload;
   try {
@@ -27,11 +31,13 @@ exports.handler = async function (event) {
   const missing = required.filter((k) => payload[k] === undefined || payload[k] === null);
   if (missing.length) return errorResponse(400, 'Missing payload fields: ' + missing.join(', '));
 
-  // Strict allowlist: body_filename must be a body upload, tattoo_filename must be a tattoo upload
-  if (!isAllowedUploadFilename(payload.body_filename) || !/^body_/i.test(payload.body_filename)) {
+  // Strict allowlist: body_filename must be a body upload, tattoo_filename must be a tattoo upload,
+  // and both must belong to the requesting tenant.
+  const ownsFile = (name) => typeof name === 'string' && name.startsWith(tenant.tenantId + '/');
+  if (!isAllowedUploadFilename(payload.body_filename) || !/(?:^|\/)body_/i.test(payload.body_filename) || !ownsFile(payload.body_filename)) {
     return errorResponse(400, 'Invalid body_filename: must be a body upload (body_N.ext)');
   }
-  if (!isAllowedUploadFilename(payload.tattoo_filename) || !/^tattoo_/i.test(payload.tattoo_filename)) {
+  if (!isAllowedUploadFilename(payload.tattoo_filename) || !/(?:^|\/)tattoo_/i.test(payload.tattoo_filename) || !ownsFile(payload.tattoo_filename)) {
     return errorResponse(400, 'Invalid tattoo_filename: must be a tattoo upload (tattoo_N.ext)');
   }
 
@@ -40,7 +46,7 @@ exports.handler = async function (event) {
   // Composite reference is optional
   let compositeBuffer = null;
   if (payload.composite_filename) {
-    if (!isAllowedUploadFilename(payload.composite_filename) || !/^composite_/i.test(payload.composite_filename)) {
+    if (!isAllowedUploadFilename(payload.composite_filename) || !/(?:^|\/)composite_/i.test(payload.composite_filename) || !ownsFile(payload.composite_filename)) {
       return errorResponse(400, 'Invalid composite_filename: must be a composite upload (composite_N.ext)');
     }
     try {
@@ -129,7 +135,7 @@ exports.handler = async function (event) {
     const result = await callAI(parts);
 
     const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
-    const outName = await nextFilename(store, 'result', ext);
+    const outName = await nextFilename(store, 'result', ext, tenant.tenantId);
     await store.set(outName, result.data);
 
     const elapsed = Date.now() - t0;
