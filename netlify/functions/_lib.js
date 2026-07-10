@@ -1,4 +1,4 @@
- 'use strict';
+'use strict';
 /**
  * Shared helpers for InkFrame's Netlify Functions.
  *
@@ -74,19 +74,7 @@ function getValidLicenseKeys() {
     .filter(Boolean);
 }
 
-function tenantIdForLicense(licenseKey) {
-  return 't_' + crypto.createHash('sha256').update(licenseKey).digest('hex').slice(0, 16);
-}
 
-// Call at the top of every handler. Returns { tenantId } on success or
-// { errorResponse } if the request should be rejected.
-function requireTenant(event) {
-  const key = getHeader(event, 'x-inkframe-license');
-  if (!key || !getValidLicenseKeys().includes(key)) {
-    return { errorResponse: errorResponse(401, 'Invalid or missing license key') };
-  }
-  return { tenantId: tenantIdForLicense(key) };
-}
 
 let r2Client;
 
@@ -393,7 +381,7 @@ function parseAIError(rawText) {
       const info = details.find((item) => item && item.reason);
       if (info) reason = info.reason;
     }
-  } catch (_) {}
+  } catch (_) { }
   return { detail, reason };
 }
 
