@@ -9,11 +9,15 @@ const {
   callAI,
   nextFilename,
   getPublicUrl,
+  requireTenant,
 } = require('./_lib');
 
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') return errorResponse(405, 'Method not allowed');
   const t0 = Date.now();
+
+  const tenant = requireTenant(event);
+  if (tenant.errorResponse) return tenant.errorResponse;
 
   let body;
   try {
@@ -23,7 +27,11 @@ exports.handler = async function (event) {
   }
 
   const { source_filename } = body;
-  if (!isAllowedUploadFilename(source_filename) || !/^steal_src_/i.test(source_filename)) {
+  if (
+    !isAllowedUploadFilename(source_filename) ||
+    !/(?:^|\/)steal_src_/i.test(source_filename) ||
+    !source_filename.startsWith(tenant.tenantId + '/')
+  ) {
     return errorResponse(400, 'Invalid source_filename: must be a steal-source upload (steal_src_N.ext)');
   }
 
@@ -56,7 +64,7 @@ exports.handler = async function (event) {
 
     const result = await callAI(parts);
     const ext = result.mimeType === 'image/jpeg' ? '.jpg' : '.png';
-    const outName = await nextFilename(store, 'stolen', ext);
+    const outName = await nextFilename(store, 'stolen', ext, tenant.tenantId);
     await store.set(outName, result.data);
 
     const elapsed = Date.now() - t0;
