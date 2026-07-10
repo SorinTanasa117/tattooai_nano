@@ -74,7 +74,32 @@ function getValidLicenseKeys() {
     .filter(Boolean);
 }
 
+// Derives a stable, non-reversible tenant folder id ("t_<16 hex chars>")
+// from a raw license key, so different customers' files land in different
+// prefixes without exposing their actual license key in storage keys.
+function tenantIdForLicense(licenseKey) {
+  const hash = crypto.createHash('sha256').update(licenseKey).digest('hex');
+  return 't_' + hash.slice(0, 16);
+}
 
+// Reads the X-InkFrame-License header, checks it against the configured
+// license keys, and returns { tenantId } on success or { errorResponse }
+// on failure (missing/unknown key), so callers can just do:
+//   const tenant = requireTenant(event);
+//   if (tenant.errorResponse) return tenant.errorResponse;
+function requireTenant(event) {
+  const licenseKey = getHeader(event, 'x-inkframe-license');
+  if (!licenseKey) {
+    return { errorResponse: errorResponse(401, 'Missing X-InkFrame-License header') };
+  }
+
+  const validKeys = getValidLicenseKeys();
+  if (!validKeys.includes(licenseKey)) {
+    return { errorResponse: errorResponse(401, 'Invalid license key') };
+  }
+
+  return { tenantId: tenantIdForLicense(licenseKey) };
+}
 
 let r2Client;
 
