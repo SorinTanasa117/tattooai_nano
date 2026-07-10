@@ -48,8 +48,14 @@ button, input, select { font: inherit; color: inherit; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .layout {
-  display: grid; grid-template-columns: 1fr 320px;
-  height: calc(100vh - 52px); gap: 0;
+  display: grid;
+  /* Sidebar = 20% wider baseline (384px @ 1280px viewport) and scales
+     with viewport up to 500px on wide monitors.  clamp() guarantees the
+     layout never collapses below the mobile breakpoint, and never eats
+     too much of the canvas on ultrawide displays. */
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 500px);
+  height: calc(100vh - 52px);
+  gap: 0;
 }
 
 .canvas-pane {
@@ -163,12 +169,65 @@ button, input, select { font: inherit; color: inherit; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-ghost { width: 100%; }
-.btn-ghost .btn-hint {
-  margin-left: auto; color: var(--text-dim); font-size: 11px;
-  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* Filename hint → compact checkmark badge.
+   The raw filename text stays in the DOM (so screen readers + app.js's
+   "uploading…" transient state still work) but sighted users only see a
+   20px green checkmark when a file is loaded. This stops the upload
+   button from growing wider than the panel and pushing the 44px camera
+   button off-screen. */
+.btn-ghost .btn-hint,
+.btn-steal .btn-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0;          /* hide filename visually */
+  line-height: 0;
+  color: transparent;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: background 150ms ease, border-color 150ms ease;
 }
-.btn-ghost .btn-hint.has-file { color: var(--ok); }
+.btn-ghost .btn-hint.has-file,
+.btn-steal .btn-hint.has-file {
+  color: var(--ok);
+  background: rgba(62, 207, 142, 0.14);
+  border-color: rgba(62, 207, 142, 0.5);
+}
+.btn-ghost .btn-hint.has-file::before,
+.btn-steal .btn-hint.has-file::before {
+  content: "✓";
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ok);
+}
 .btn-mini { padding: 5px 10px; font-size: 12px; flex: 1; }
+
+/* Fixed height for the upload/steal buttons so they always match the
+   44px camera buttons beside them, no matter how much the label text
+   wraps at different font/zoom scales. Labels ellipsis instead of
+   wrapping and pushing the button taller. */
+.btn-ghost,
+.btn-steal {
+  height: 44px;
+  overflow: hidden;
+}
+.btn-ghost .btn-label,
+.btn-steal .btn-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.btn-ghost .btn-icon,
+.btn-steal .btn-icon {
+  flex-shrink: 0;
+}
 
 .btn-primary {
   width: 100%; padding: 12px; font-size: 14px; font-weight: 600;
@@ -189,10 +248,12 @@ button, input, select { font: inherit; color: inherit; }
 .upload-slot { display: flex; gap: 6px; align-items: stretch; flex: 1; min-width: 0; }
 .upload-slot .btn-ghost { flex: 1; min-width: 0; }
 
-/* Camera icon button — hidden on desktop, shown on mobile */
+/* Camera icon button — shown on every screen size; pairs with the file
+   upload label in the same row.  Fixed 44x44px square so the file label
+   beside it can claim the remaining width via flex: 1. */
 .btn-camera {
-  display: none; /* shown via media query below */
-  flex-shrink: 0;
+  display: inline-flex;
+  flex: 0 0 44px;          /* never grow, never shrink below 44px */
   width: 44px; height: 44px;
   padding: 0;
   align-items: center; justify-content: center;
@@ -205,12 +266,25 @@ button, input, select { font: inherit; color: inherit; }
 }
 .btn-camera:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--bg-3); }
 .btn-camera svg { display: block; }
+.btn-camera .btn-label {
+  /* Camera buttons are icon-only — the descriptive label is duplicated
+     on the neighbouring file upload label, so dropping it here keeps
+     the 44x44 square compact and prevents the text from wrapping. */
+  display: none;
+}
 
 /* Steal row: steal button + camera button side by side */
 .steal-btn-row { display: flex; gap: 8px; align-items: stretch; }
 
 .upload-row, .quick-row, .result-actions, .rot-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .quick-row, .result-actions, .rot-row { margin-bottom: 0; }
+
+/* Upload row buttons: file label / steal button flex to fill the row,
+   camera button keeps its fixed 44px width (see .btn-camera). */
+.upload-row .btn:not(.btn-camera) {
+  flex: 1;
+  min-width: 0;
+}
 
 .slider-row {
   display: grid; grid-template-columns: 50px 24px 1fr 24px 60px;
@@ -456,7 +530,10 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
 /* Steal Tattoo button */
 .steal-area { margin-top: 8px; }
 .btn-steal {
-  width: 100%; flex: 1;
+  /* No fixed width — the row's flex layout (.upload-row .btn:not(.btn-camera))
+     already gives this button flex: 1 to share space with the file label
+     and stay clear of the 44px camera button. */
+  width: auto;
   background: linear-gradient(135deg, rgba(245,166,35,0.12), rgba(245,166,35,0.04));
   border-color: rgba(245,166,35,0.35);
 }
@@ -464,10 +541,8 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
   border-color: var(--warn); background: rgba(245,166,35,0.18);
 }
 .btn-steal .btn-icon { color: var(--warn); }
-.btn-steal .btn-hint {
-  margin-left: auto; color: var(--text-dim); font-size: 11px;
-  max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/* (btn-steal .btn-hint styling is now merged into the .btn-ghost .btn-hint
+   rule above — the same checkmark badge applies to both button variants.) */
 .steal-progress {
   margin-top: 8px; display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; background: var(--bg-2);
@@ -600,6 +675,12 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
     overflow: visible;
   }
 
+  /* Stack the two-column design split into one column on mobile. */
+  .design-split-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
   /* Switch canvas-host to relative so the Konva stage (which has explicit px
      dimensions set by JS) drives the container height on mobile. */
   .canvas-host {
@@ -620,10 +701,9 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
     overflow-y: auto;
   }
 
-  /* show camera icon buttons; steal button shrinks to share the row */
-  .btn-camera { display: flex; }
-  .steal-btn-row .btn-steal { width: auto; }
-  .upload-row .btn {
+  /* Upload row layout: file label / steal button take the remaining space;
+     camera buttons are fixed 44px and excluded from flex grow. */
+  .upload-row .btn:not(.btn-camera) {
     flex: 1;
     min-width: 0;
   }
@@ -632,6 +712,88 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
   .slider-step { width: 28px; height: 28px; }
 
   .brand .tag { display: none; }
+}
+
+/* ── Workflow Steps Layout Styling ── */
+
+.workflow-step-container {
+  margin-bottom: 14px;
+  background: rgba(14, 15, 18, 0.25);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+}
+
+.workflow-step-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.design-split-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.design-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.design-column-header {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.steal-action-group {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+}
+.steal-action-group .btn-steal:not(.btn-camera) {
+  flex: 1;
+  min-width: 0;
+}
+/* The camera button also carries .btn-steal for its gold styling, but it
+   must keep the same fixed 44x44 square as every other camera button
+   (see .btn-camera). Restate the fixed sizing here with matching
+   specificity so it isn't overridden by the rule above. */
+.steal-action-group .btn-camera {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+
+/* Gold Theme Override for AI Steal Features */
+:root {
+  --gold-accent: #f5a623;
+  --gold-glow: rgba(245, 166, 35, 0.25);
+}
+
+.btn-steal .btn-icon {
+  color: var(--gold-accent) !important;
+  font-size: 14px;
+}
+
+.btn-camera-gold {
+  border-color: rgba(245, 166, 35, 0.4) !important;
+  color: var(--gold-accent) !important;
+  background: rgba(245, 166, 35, 0.04) !important;
+}
+
+.btn-camera-gold:hover:not(:disabled) {
+  border-color: var(--gold-accent) !important;
+  background: rgba(245, 166, 35, 0.15) !important;
+  box-shadow: 0 0 8px var(--gold-glow);
 }
 
 /* ── History carousel (arrows — hidden on desktop) ───────────────────────── */
