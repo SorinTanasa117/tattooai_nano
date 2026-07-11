@@ -1,18 +1,13 @@
 'use strict';
 
-const { getUploadsStore, jsonResponse, errorResponse, getAIModelName, requireTenant, getPublicUrl } = require('./_lib');
-// Add this temporarily to status.js to test:
-console.log("Environment Keys Found:", Object.keys(process.env).filter(key => !key.startsWith("AWS_")));
+const { getUploadsStore, jsonResponse, errorResponse, getAIModelName, getPublicUrl } = require('./_lib');
 
 exports.handler = async function (event) {
   if (event.httpMethod !== 'GET') return errorResponse(405, 'Method not allowed');
 
-  const tenant = requireTenant(event);
-  if (tenant.errorResponse) return tenant.errorResponse;
-
   try {
     const store = getUploadsStore();
-    const { blobs } = await store.list({ prefix: tenant.tenantId + '/' });
+    const { blobs } = await store.list({});
     const keys = blobs.map((b) => b.key);
     const bodies = keys.filter((f) => /body_\d+\./i.test(f)).sort();
     const tattoos = keys.filter((f) => /tattoo_\d+\./i.test(f)).sort();

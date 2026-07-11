@@ -10,7 +10,6 @@ const {
   extOf,
   getHeader,
   getPublicUrl,
-  requireTenant,
 } = require('./_lib');
 
 const PREFIX_MAP = { body: 'body', tattoo: 'tattoo', 'steal-source': 'steal_src', composite: 'composite' };
@@ -31,9 +30,6 @@ function getUploadKind(event) {
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') return errorResponse(405, 'Method not allowed');
 
-  const tenant = requireTenant(event);
-  if (tenant.errorResponse) return tenant.errorResponse;
-
   const kind = getUploadKind(event);
   const prefix = PREFIX_MAP[kind];
   if (!prefix) return errorResponse(400, 'Unknown upload kind: ' + kind);
@@ -47,7 +43,7 @@ exports.handler = async function (event) {
     const { originalName, data } = parseMultipartEvent(event);
     const ext = extOf(originalName);
     const store = getUploadsStore();
-    const finalName = await nextFilename(store, prefix, ext, tenant.tenantId);
+    const finalName = await nextFilename(store, prefix, ext);
 
     if (!isAllowedUploadFilename(finalName)) {
       return errorResponse(400, 'Generated filename not allowed: ' + finalName);

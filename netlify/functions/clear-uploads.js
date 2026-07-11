@@ -1,6 +1,6 @@
 'use strict';
 
-const { getUploadsStore, jsonResponse, errorResponse, isAllowedUploadFilename, requireTenant } = require('./_lib');
+const { getUploadsStore, jsonResponse, errorResponse, isAllowedUploadFilename } = require('./_lib');
 
 // Wipes every blob in the "uploads" store matching our filename allowlist.
 // Called on refresh/startup (see app.js sendBeacon/fetch to /api/clear-uploads).
@@ -9,12 +9,9 @@ const { getUploadsStore, jsonResponse, errorResponse, isAllowedUploadFilename, r
 exports.handler = async function (event) {
   if (event.httpMethod !== 'POST') return errorResponse(405, 'Method not allowed');
 
-  const tenant = requireTenant(event);
-  if (tenant.errorResponse) return tenant.errorResponse;
-
   try {
     const store = getUploadsStore();
-    const { blobs } = await store.list({ prefix: tenant.tenantId + '/' });
+    const { blobs } = await store.list({});
     let deletedCount = 0;
     for (const b of blobs) {
       if (isAllowedUploadFilename(b.key)) {
