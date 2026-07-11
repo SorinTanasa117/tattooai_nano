@@ -13,6 +13,18 @@
   # serverless source or build output as a harmless default/fallback value.
   SECRETS_SCAN_OMIT_KEYS = "AI_MODEL_NAME,RENDER_TIMEOUT_MS"
 
+# Netlify's default synchronous function timeout is 10s, but AI image
+# generation (run-workflow, steal-tattoo) routinely takes 10-25s. Without
+# this, Lambda kills the function mid-call and the client just sees a
+# generic 502. Extending to 26s (the max for synchronous functions) needs
+# a paid plan -- on the free/Starter plan this setting is ignored and
+# capped at 10s regardless.
+[functions."run-workflow"]
+  timeout = 26
+
+[functions."steal-tattoo"]
+  timeout = 26
+
 # 1. SECURITY: Block public web access to configuration and backend files
 [[redirects]]
   from = "/netlify.toml"
