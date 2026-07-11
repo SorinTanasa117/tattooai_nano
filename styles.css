@@ -853,3 +853,78 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--text-dim)
     flex-basis: 46px;
   }
 }
+
+/* ---------------------------------------------------------------------
+   Template tattoo picker: full-screen modal with a horizontally
+   scrolling "reel" of thumbnails, mirroring the history-carousel's
+   visual language.
+--------------------------------------------------------------------- */
+.template-modal {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.template-modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(10, 11, 15, 0.72);
+  backdrop-filter: blur(2px);
+}
+.template-modal-panel {
+  position: relative;
+  width: 100%; max-width: 720px; max-height: 80vh;
+  background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: 14px; padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.template-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.template-modal-title { font-size: 15px; font-weight: 700; }
+.template-modal-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--text-dim);
+  cursor: pointer; transition: all 120ms; font-size: 14px;
+}
+.template-modal-close:hover { border-color: var(--accent); color: var(--text); }
+
+.template-reel {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  padding: 4px 2px 8px;
+}
+.template-reel-loading,
+.template-reel-empty {
+  grid-column: 1 / -1;
+  padding: 40px 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.template-item {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 120ms, transform 120ms;
+}
+.template-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.template-item img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+
+@media (max-width: 767px) {
+  .template-modal { padding: 12px; }
+  .template-modal-panel { max-height: 85vh; }
+  .template-reel { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+}
