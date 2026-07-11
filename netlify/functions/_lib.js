@@ -386,7 +386,7 @@ async function callAI(parts) {
   const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
   const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   const AI_MODEL_NAME = getAIModelName();
-  const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '25000', 10);
+  const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '50000', 10);
 
   if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
 
