@@ -133,6 +133,35 @@ async function applyOpacityToFile(file, opacity) {
 }
 
 
+/**
+ * Safely parse a fetch Response as JSON. Netlify (and most gateways) can
+ * return a plain HTML error page for things it kills before your function
+ * code runs -- a platform-level timeout, a cold-start crash, a 502/504 from
+ * the Lambda gateway, etc. Calling resp.json() directly on one of those
+ * throws a cryptic "Unexpected token '<'... is not valid JSON" instead of
+ * a message that explains what actually happened. This reads the body as
+ * text first and only parses it if it looks like JSON, so callers always
+ * get a readable Error either way.
+ */
+async function parseJsonResponse(resp) {
+  const raw = await resp.text();
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const snippet = raw.trim().slice(0, 200);
+    if (resp.status === 504 || /timed out|timeout/i.test(snippet)) {
+      throw new Error(
+        'The render timed out on the server before finishing (HTTP ' + resp.status + '). ' +
+        'This usually means the AI call took longer than the function\u2019s allowed runtime. Try again, or a simpler placement.'
+      );
+    }
+    throw new Error(
+      'Server returned an unexpected non-JSON response (HTTP ' + resp.status + '): ' +
+      (snippet || '(empty body)')
+    );
+  }
+}
+
 function $(id) { return document.getElementById(id); }
 
 const els = {
@@ -488,7 +517,7 @@ async function onStealSourceSelected(e) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source_filename: uploadResult.filename }),
     });
-    const stealData = await stealResp.json();
+    const stealData = await parseJsonResponse(stealResp);
 
     if (!stealResp.ok || stealData.status !== 'done') {
       throw new Error(stealData.message || ('Steal pipeline failed (' + stealResp.status + ')'));
@@ -692,7 +721,7 @@ async function onRender() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await resp.json();
+    const data = await parseJsonResponse(resp);
     clearInterval(tickerInterval);
 
     if (!resp.ok || data.status !== 'done') {

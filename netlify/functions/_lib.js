@@ -386,7 +386,12 @@ async function callAI(parts) {
   const AI_API_BASE_URL = (process.env.AI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
   const AI_API_KEY = process.env.AI_PROVIDER_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
   const AI_MODEL_NAME = getAIModelName();
-  const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '50000', 10);
+  // Must stay comfortably under Netlify's synchronous function timeout
+  // (26s on paid plans, 10s on free/Starter — see netlify.toml). 50s was
+  // previously used as the default here, which meant any Gemini call
+  // slower than the platform's own limit got killed by Netlify first,
+  // producing a raw HTML gateway-timeout page instead of a JSON error.
+  const RENDER_TIMEOUT_MS = parseInt(process.env.RENDER_TIMEOUT_MS || '23000', 10);
 
   if (!AI_API_KEY) throw new Error('AI_PROVIDER_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set in environment');
 
